@@ -1,0 +1,266 @@
+"""Compute robust AOI-specific normalization statistics for TEMPO NO2 rasters."""
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+from preprocessing.generate_dataset_utils import (
+    NO2_RASTER_NAME,
+    ScanTask,
+    bounded_parallel_map,
+    make_scan_task,
+    process_scan,
+    write_json_atomic,
+)
+from preprocessing.stratify_utils import AOI_ID_COL
+from preprocessing.tempo_mapping import load_tempo_mapping
+
+from config import (
+    DATASET_DIR,
+    DATASET_TEMPO_CACHE_DIR,
+    DATASET_WORKERS_PER_SHARD,
+    TEMPO_DIR,
+    TEST_RECORDS_CSV,
+    TRAIN_RECORDS_CSV,
+    VAL_RECORDS_CSV,
+)
+
+DEFAULT_OUTPUT = Path(DATASET_DIR) / "aoi-no2-normalization.json"
+DEFAULT_RASTERS_PER_MONTH = 40
+DEFAULT_RANDOM_SEED = 42
+MONTHS = tuple(range(1, 13))
+MIN_SCALE = 1e-12
+ROBUST_STD_NORMALIZER = 1.349
+SPLIT_PATHS = (TRAIN_RECORDS_CSV, VAL_RECORDS_CSV, TEST_RECORDS_CSV)
+
+
+@dataclass(frozen=True)
+class AoiNormalizationTask:
+    """Selected TEMPO scans used to fit one AOI's normalization."""
+
+    aoi_id: int
+    scans: tuple[ScanTask, ...]
+
+
+@dataclass(frozen=True)
+class AoiNormalizationResult:
+    """Robust NO2 normalization fitted for one AOI."""
+
+    aoi_id: int
+    median: float
+    scale: float
+    valid_pixels: int
+    rasters: int
+
+
+def _positive_int(value: str) -> int:
+    # Parse a strictly positive command-line integer
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse AOI normalization command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--rasters-per-month", type=_positive_int, default=DEFAULT_RASTERS_PER_MONTH)
+    parser.add_argument("--workers", type=_positive_int, default=DATASET_WORKERS_PER_SHARD)
+    parser.add_argument("--seed", type=int, default=DEFAULT_RANDOM_SEED)
+    return parser.parse_args()
+
+
+def _load_target_aois() -> pl.DataFrame:
+    # Collect one stable coordinate pair for every AOI in the current splits
+    frames = []
+    for path in SPLIT_PATHS:
+        split_path = Path(path)
+        if not split_path.is_file():
+            raise FileNotFoundError(f"Stratification output is missing: {split_path}")
+        frames.append(pl.scan_csv(split_path).select(AOI_ID_COL, "lat", "lon").unique().collect())
+    aois = pl.concat(frames).unique().sort(AOI_ID_COL)
+    coordinate_counts = aois.group_by(AOI_ID_COL).len()
+    inconsistent = coordinate_counts.filter(pl.col("len") != 1)
+    if not inconsistent.is_empty():
+        identifiers = ", ".join(str(value) for value in inconsistent[AOI_ID_COL].to_list())
+        raise ValueError(f"AOIs have inconsistent coordinates across stratification outputs: {identifiers}")
+    return aois
+
+
+def _scan_task(row: dict[str, object], aoi: dict[str, object]) -> ScanTask:
+    # Reuse the dataset generator's exact cache identity
+    return make_scan_task(
+        {
+            AOI_ID_COL: int(aoi[AOI_ID_COL]),
+            "lat": float(aoi["lat"]),
+            "lon": float(aoi["lon"]),
+            "granule_paths": row["granule_paths"],
+        },
+        "granule_paths",
+        Path(TEMPO_DIR),
+        Path(DATASET_TEMPO_CACHE_DIR),
+    )
+
+
+def _select_month_scans(
+    candidates: pl.DataFrame,
+    aoi: dict[str, object],
+    month: int,
+    quota: int,
+    seed: int,
+) -> tuple[tuple[ScanTask, ...], int]:
+    # Probe randomized candidates until the cache supplies the quota or the month is exhausted
+    random = np.random.default_rng(np.random.SeedSequence((seed, int(aoi[AOI_ID_COL]), month)))
+    order = random.permutation(candidates.height)
+    hits: list[ScanTask] = []
+    misses: list[ScanTask] = []
+    seen_keys: set[str] = set()
+    rows = candidates.to_dicts()
+    for index in order:
+        task = _scan_task(rows[int(index)], aoi)
+        if task.cache_key in seen_keys:
+            continue
+        seen_keys.add(task.cache_key)
+        if Path(task.cache_path).is_file():
+            hits.append(task)
+            if len(hits) == quota:
+                return tuple(hits), len(hits)
+        else:
+            misses.append(task)
+
+    selected_misses = misses[: max(quota - len(hits), 0)]
+    return tuple((*hits, *selected_misses)), len(hits)
+
+
+def _build_aoi_task(
+    aoi: dict[str, object],
+    observations: pl.DataFrame,
+    rasters_per_month: int,
+    seed: int,
+) -> tuple[AoiNormalizationTask, int]:
+    # Select cache hits first within each calendar month
+    selected: list[ScanTask] = []
+    cache_hits = 0
+    for month in MONTHS:
+        candidates = observations.filter(pl.col("month") == month)
+        month_scans, month_hits = _select_month_scans(candidates, aoi, month, rasters_per_month, seed)
+        selected.extend(month_scans)
+        cache_hits += month_hits
+        if len(month_scans) < rasters_per_month:
+            print(
+                f"AOI {aoi[AOI_ID_COL]} month {month:02d}: selected "
+                f"{len(month_scans):,}/{rasters_per_month:,} available rasters"
+            )
+    return AoiNormalizationTask(int(aoi[AOI_ID_COL]), tuple(selected)), cache_hits
+
+
+def _build_tasks(
+    aois: pl.DataFrame,
+    rasters_per_month: int,
+    seed: int,
+) -> list[AoiNormalizationTask]:
+    # Join the general observation pool to active AOIs before planning cache probes
+    observations = (
+        load_tempo_mapping()
+        .join(aois.select(AOI_ID_COL), on=AOI_ID_COL, how="semi")
+        .unique(subset=[AOI_ID_COL, "tempo_time"], keep="first")
+        .with_columns(pl.col("tempo_time").dt.month().alias("month"))
+        .sort(AOI_ID_COL, "tempo_time")
+    )
+    observations_by_aoi = {
+        int(key[0]): frame for key, frame in observations.partition_by(AOI_ID_COL, as_dict=True).items()
+    }
+    tasks = []
+    for aoi in aois.iter_rows(named=True):
+        aoi_id = int(aoi[AOI_ID_COL])
+        aoi_observations = observations_by_aoi.get(
+            aoi_id,
+            observations.clear(),
+        )
+        task, cache_hits = _build_aoi_task(aoi, aoi_observations, rasters_per_month, seed)
+        cache_misses = len(task.scans) - cache_hits
+        hit_percentage = 100.0 * cache_hits / len(task.scans) if task.scans else 0.0
+        miss_percentage = 100.0 * cache_misses / len(task.scans) if task.scans else 0.0
+        print(
+            f"AOI {aoi_id}: {len(task.scans):,} samples; {cache_hits:,} cache hits "
+            f"({hit_percentage:.1f}%); {cache_misses:,} cache misses ({miss_percentage:.1f}%)"
+        )
+        tasks.append(task)
+    return tasks
+
+
+def _compute_aoi_normalization(task: AoiNormalizationTask) -> AoiNormalizationResult:
+    # Read or generate every selected raster before pooling its finite NO2 pixels
+    valid_values: list[np.ndarray] = []
+    for scan in task.scans:
+        if not Path(scan.cache_path).is_file():
+            result = process_scan(scan)
+            if result.error is not None:
+                raise RuntimeError(f"AOI {task.aoi_id} scan {scan.cache_key} failed: {result.error}")
+        with np.load(scan.cache_path, allow_pickle=False) as raster:
+            no2 = np.asarray(raster[NO2_RASTER_NAME], dtype=np.float32)
+        finite = no2[np.isfinite(no2)]
+        if finite.size:
+            valid_values.append(finite)
+
+    if not valid_values:
+        raise ValueError(f"AOI {task.aoi_id} has no finite NO2 pixels across {len(task.scans):,} rasters")
+    pooled = np.concatenate(valid_values)
+    lower, median, upper = np.percentile(pooled, (25, 50, 75), overwrite_input=True)
+    scale = float((upper - lower) / ROBUST_STD_NORMALIZER)
+    if not np.isfinite(scale) or scale <= MIN_SCALE:
+        scale = 1.0
+    return AoiNormalizationResult(
+        aoi_id=task.aoi_id,
+        median=float(median),
+        scale=scale,
+        valid_pixels=int(pooled.size),
+        rasters=len(task.scans),
+    )
+
+
+def compute_aoi_no2_normalization(
+    output: Path,
+    rasters_per_month: int = DEFAULT_RASTERS_PER_MONTH,
+    workers: int = DATASET_WORKERS_PER_SHARD,
+    seed: int = DEFAULT_RANDOM_SEED,
+) -> None:
+    """Compute and save robust NO2 normalization for every stratified AOI.
+
+    Args:
+        output: Destination JSON mapping AOI identifiers to statistics.
+        rasters_per_month: Maximum selected raster count for each AOI-month.
+        workers: AOIs processed concurrently.
+        seed: Deterministic sampling seed.
+    """
+    aois = _load_target_aois()
+    tasks = _build_tasks(aois, rasters_per_month, seed)
+    results: dict[int, AoiNormalizationResult] = {}
+    for result in bounded_parallel_map(_compute_aoi_normalization, tasks, workers):
+        results[result.aoi_id] = result
+        print(f"Completed AOI {result.aoi_id}: {len(results):,}/{len(tasks):,}")
+
+    serialized = {
+        str(aoi_id): {
+            "median": result.median,
+            "scale": result.scale,
+            "valid_pixels": result.valid_pixels,
+            "rasters": result.rasters,
+        }
+        for aoi_id, result in sorted(results.items())
+    }
+    write_json_atomic(serialized, output)
+    print(f"Saved AOI NO2 normalization for {len(serialized):,} AOIs to {output}")
+
+
+def main() -> None:
+    """Run AOI-specific TEMPO NO2 normalization."""
+    args = parse_args()
+    compute_aoi_no2_normalization(args.output, args.rasters_per_month, args.workers, args.seed)
+
+
+if __name__ == "__main__":
+    main()
