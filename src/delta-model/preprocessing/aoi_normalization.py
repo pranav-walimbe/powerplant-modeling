@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from preprocessing.generate_dataset_utils import (
@@ -15,19 +16,21 @@ from preprocessing.generate_dataset_utils import (
     write_json_atomic,
 )
 from preprocessing.stratify_utils import AOI_ID_COL
-from preprocessing.tempo_mapping import load_tempo_mapping
 
 from config import (
     DATASET_DIR,
     DATASET_TEMPO_CACHE_DIR,
     DATASET_WORKERS_PER_SHARD,
+    TEMPO_AOI_MAPPING,
     TEMPO_DIR,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
     VAL_RECORDS_CSV,
+    VIS_DIR,
 )
 
 DEFAULT_OUTPUT = Path(DATASET_DIR) / "aoi-no2-normalization.json"
+DEFAULT_PLOT_OUTPUT = Path(VIS_DIR) / "aoi-no2-normalization.png"
 DEFAULT_RASTERS_PER_MONTH = 40
 DEFAULT_RANDOM_SEED = 42
 MONTHS = tuple(range(1, 13))
@@ -67,6 +70,7 @@ def parse_args() -> argparse.Namespace:
     """Parse AOI normalization command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--plot-output", type=Path, default=DEFAULT_PLOT_OUTPUT)
     parser.add_argument("--rasters-per-month", type=_positive_int, default=DEFAULT_RASTERS_PER_MONTH)
     parser.add_argument("--workers", type=_positive_int, default=DATASET_WORKERS_PER_SHARD)
     parser.add_argument("--seed", type=int, default=DEFAULT_RANDOM_SEED)
@@ -162,23 +166,28 @@ def _build_tasks(
     rasters_per_month: int,
     seed: int,
 ) -> list[AoiNormalizationTask]:
-    # Join the general observation pool to active AOIs before planning cache probes
+    # Stream only active AOI rows from the general observation mapping
+    mapping_paths = sorted(Path(TEMPO_AOI_MAPPING).rglob("date=*.parquet"))
+    if not mapping_paths:
+        raise FileNotFoundError(f"TEMPO AOI-observation mapping is empty: {TEMPO_AOI_MAPPING}")
     observations = (
-        load_tempo_mapping()
-        .join(aois.select(AOI_ID_COL), on=AOI_ID_COL, how="semi")
-        .unique(subset=[AOI_ID_COL, "tempo_time"], keep="first")
+        pl.scan_parquet(mapping_paths)
+        .select(AOI_ID_COL, "tempo_time", "granule_paths")
+        .join(aois.select(AOI_ID_COL).lazy(), on=AOI_ID_COL, how="semi")
         .with_columns(pl.col("tempo_time").dt.month().alias("month"))
-        .sort(AOI_ID_COL, "tempo_time")
+        .collect(engine="streaming")
     )
+    empty_observations = observations.clear()
     observations_by_aoi = {
         int(key[0]): frame for key, frame in observations.partition_by(AOI_ID_COL, as_dict=True).items()
     }
+    del observations
     tasks = []
     for aoi in aois.iter_rows(named=True):
         aoi_id = int(aoi[AOI_ID_COL])
         aoi_observations = observations_by_aoi.get(
             aoi_id,
-            observations.clear(),
+            empty_observations,
         )
         task, cache_hits = _build_aoi_task(aoi, aoi_observations, rasters_per_month, seed)
         cache_misses = len(task.scans) - cache_hits
@@ -190,6 +199,74 @@ def _build_tasks(
         )
         tasks.append(task)
     return tasks
+
+
+def _color_limits(values: np.ndarray) -> tuple[float, float]:
+    # Limit map colors to the central range while retaining every AOI marker
+    lower, upper = np.percentile(values, (2, 98))
+    if np.isclose(lower, upper):
+        padding = max(abs(float(lower)) * 0.01, 1.0)
+        return float(lower - padding), float(upper + padding)
+    return float(lower), float(upper)
+
+
+def _plot_normalization(
+    results: dict[int, AoiNormalizationResult],
+    aois: pl.DataFrame,
+    destination: Path,
+) -> None:
+    # Show the geographic and joint variation of fitted AOI statistics
+    rows = []
+    coordinates = {int(row[AOI_ID_COL]): row for row in aois.iter_rows(named=True)}
+    for aoi_id, result in sorted(results.items()):
+        coordinate = coordinates[aoi_id]
+        rows.append(
+            (
+                float(coordinate["lon"]),
+                float(coordinate["lat"]),
+                result.median,
+                result.scale,
+                result.rasters,
+            )
+        )
+    values = np.asarray(rows, dtype=np.float64)
+    longitudes, latitudes, medians, scales, raster_counts = values.T
+    median_limits = _color_limits(medians)
+    scale_limits = _color_limits(scales)
+
+    figure, axes = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
+    median_map = axes[0].scatter(
+        longitudes,
+        latitudes,
+        c=medians,
+        cmap="viridis",
+        s=24,
+        vmin=median_limits[0],
+        vmax=median_limits[1],
+    )
+    figure.colorbar(median_map, ax=axes[0], label="NO2 median")
+    axes[0].set(title="AOI normalization center", xlabel="Longitude", ylabel="Latitude")
+
+    scale_map = axes[1].scatter(
+        longitudes,
+        latitudes,
+        c=scales,
+        cmap="magma",
+        s=24,
+        vmin=scale_limits[0],
+        vmax=scale_limits[1],
+    )
+    figure.colorbar(scale_map, ax=axes[1], label="NO2 robust scale")
+    axes[1].set(title="AOI normalization scale", xlabel="Longitude", ylabel="Latitude")
+
+    relationship = axes[2].scatter(medians, scales, c=raster_counts, cmap="plasma", s=24)
+    figure.colorbar(relationship, ax=axes[2], label="Rasters sampled")
+    axes[2].set(title="Center-scale relationship", xlabel="NO2 median", ylabel="NO2 robust scale")
+    figure.suptitle(f"AOI-specific TEMPO NO2 normalization ({len(results):,} AOIs)", fontsize=16)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(destination, dpi=200)
+    plt.close(figure)
 
 
 def _compute_aoi_normalization(task: AoiNormalizationTask) -> AoiNormalizationResult:
@@ -224,6 +301,7 @@ def _compute_aoi_normalization(task: AoiNormalizationTask) -> AoiNormalizationRe
 
 def compute_aoi_no2_normalization(
     output: Path,
+    plot_output: Path,
     rasters_per_month: int = DEFAULT_RASTERS_PER_MONTH,
     workers: int = DATASET_WORKERS_PER_SHARD,
     seed: int = DEFAULT_RANDOM_SEED,
@@ -232,6 +310,7 @@ def compute_aoi_no2_normalization(
 
     Args:
         output: Destination JSON mapping AOI identifiers to statistics.
+        plot_output: Destination PNG summarizing AOI statistics.
         rasters_per_month: Maximum selected raster count for each AOI-month.
         workers: AOIs processed concurrently.
         seed: Deterministic sampling seed.
@@ -253,13 +332,21 @@ def compute_aoi_no2_normalization(
         for aoi_id, result in sorted(results.items())
     }
     write_json_atomic(serialized, output)
+    _plot_normalization(results, aois, plot_output)
     print(f"Saved AOI NO2 normalization for {len(serialized):,} AOIs to {output}")
+    print(f"Saved AOI NO2 normalization plot to {plot_output}")
 
 
 def main() -> None:
     """Run AOI-specific TEMPO NO2 normalization."""
     args = parse_args()
-    compute_aoi_no2_normalization(args.output, args.rasters_per_month, args.workers, args.seed)
+    compute_aoi_no2_normalization(
+        args.output,
+        args.plot_output,
+        args.rasters_per_month,
+        args.workers,
+        args.seed,
+    )
 
 
 if __name__ == "__main__":
