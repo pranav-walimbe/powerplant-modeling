@@ -18,14 +18,12 @@ from preprocessing.generate_dataset_utils import (
 from preprocessing.stratify_utils import AOI_ID_COL
 
 from config import (
+    DATASET_DF,
     DATASET_DIR,
     DATASET_TEMPO_CACHE_DIR,
     DATASET_WORKERS_PER_SHARD,
     TEMPO_AOI_MAPPING,
     TEMPO_DIR,
-    TEST_RECORDS_CSV,
-    TRAIN_RECORDS_CSV,
-    VAL_RECORDS_CSV,
     VIS_DIR,
 )
 
@@ -36,7 +34,7 @@ DEFAULT_RANDOM_SEED = 42
 MONTHS = tuple(range(1, 13))
 MIN_SCALE = 1e-12
 ROBUST_STD_NORMALIZER = 1.349
-SPLIT_PATHS = (TRAIN_RECORDS_CSV, VAL_RECORDS_CSV, TEST_RECORDS_CSV)
+SPLIT_PATHS = tuple(Path(DATASET_DF) / f"{split}_df.csv" for split in ("train", "val", "test"))
 
 
 @dataclass(frozen=True)
@@ -78,13 +76,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_target_aois() -> pl.DataFrame:
-    # Collect one stable coordinate pair for every AOI in the current splits
+    # Collect one stable coordinate pair for every AOI in the finalized dataset
     frames = []
     for path in SPLIT_PATHS:
-        split_path = Path(path)
-        if not split_path.is_file():
-            raise FileNotFoundError(f"Stratification output is missing: {split_path}")
-        frames.append(pl.scan_csv(split_path).select(AOI_ID_COL, "lat", "lon").unique().collect())
+        if not path.is_file():
+            raise FileNotFoundError(f"Finalized dataset output is missing: {path}")
+        frames.append(pl.scan_csv(path).select(AOI_ID_COL, "lat", "lon").unique().collect())
     aois = pl.concat(frames).unique().sort(AOI_ID_COL)
     coordinate_counts = aois.group_by(AOI_ID_COL).len()
     inconsistent = coordinate_counts.filter(pl.col("len") != 1)
