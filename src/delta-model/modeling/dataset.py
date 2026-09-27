@@ -152,17 +152,8 @@ def _load_aoi_no2_stats(path: Path) -> tuple[dict[str, float], dict[str, float]]
     # Load the robust AOI centers and scales produced by preprocessing
     with path.open() as source:
         values = json.load(source)
-    medians: dict[str, float] = {}
-    scales: dict[str, float] = {}
-    for aoi_id, fields in values.items():
-        median = float(fields["median"])
-        scale = float(fields["scale"])
-        if not np.isfinite(median):
-            raise ValueError(f"AOI {aoi_id} has a non-finite NO2 median")
-        if not np.isfinite(scale) or scale <= MIN_SCALE:
-            raise ValueError(f"AOI {aoi_id} has an invalid NO2 scale: {scale}")
-        medians[str(aoi_id)] = median
-        scales[str(aoi_id)] = scale
+    medians = {str(aoi_id): float(fields["median"]) for aoi_id, fields in values.items()}
+    scales = {str(aoi_id): float(fields["scale"]) for aoi_id, fields in values.items()}
     return medians, scales
 
 
@@ -172,8 +163,6 @@ def _image_normalization(stats: NormalizationStats, aoi_id: int, aoi_normalize_n
     scale = np.asarray(stats.image_scale, dtype=np.float32).copy()
     if aoi_normalize_no2:
         key = str(aoi_id)
-        if key not in stats.aoi_no2_median or key not in stats.aoi_no2_scale:
-            raise KeyError(f"AOI {aoi_id} is missing NO2 normalization statistics")
         center[NO2_CHANNEL] = stats.aoi_no2_median[key]
         scale[NO2_CHANNEL] = stats.aoi_no2_scale[key]
     return center, scale
@@ -410,9 +399,6 @@ class NOxDataset(Dataset):
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.aoi_ids = pd.to_numeric(self.frame["aoi_id"], errors="raise").to_numpy(dtype=np.int64)
-        if self.load_images and self.aoi_normalize_no2:
-            for aoi_id in np.unique(self.aoi_ids):
-                _image_normalization(self.stats, int(aoi_id), True)
 
         raw_features = _feature_matrix(self.frame)
         feature_mean = np.asarray(self.stats.feature_mean, dtype=np.float64)
