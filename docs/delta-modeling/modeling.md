@@ -43,18 +43,27 @@ AOI characteristics after inference.
 ## Raster normalization and completion
 
 Training loads the configured masked-model checkpoint before it builds the
-classifier datasets. The checkpoint supplies raster normalization statistics:
+classifier datasets. The masked model uses its checkpoint's global statistics
+while it fills missing NO2 pixels. The vision classifier then converts the
+completed NO2 channel to AOI-specific normalization while retaining the masked
+model's global weather normalization:
 
-| Channels | Center | Scale |
-|---|---|---|
-| NO2 | Median | `IQR / 1.349` |
-| Temperature and wind | Mean | Population standard deviation |
+| Channels | Center | Scale | Scope |
+|---|---|---|---|
+| NO2 | Median | `IQR / 1.349` | AOI-specific for classifier input |
+| Temperature and wind | Mean | Population standard deviation | Global masked-model statistics |
 
-The loader normalizes values, clips them to `[-8, 8]`, fills numeric gaps with
-zero, and appends `no2_mask` for reconstruction. The masked autoencoder predicts
-NO2 at missing pixels and preserves observed values. Training writes the four
-completed physical channels to split-specific memory-mapped arrays under the
-job-local `/tmp` directory.
+The AOI statistics job samples up to 40 TEMPO rasters per calendar month for
+each AOI in the finalized splits. It pools finite NO2 pixels and writes each
+AOI's median and robust scale to `aoi-no2-normalization.json`.
+
+The loader applies the masked-model normalization, clips values to `[-8, 8]`,
+fills numeric gaps with zero, and appends `no2_mask` for reconstruction. The
+masked autoencoder predicts NO2 at missing pixels and preserves observed
+values. Training writes the four globally normalized completed channels to
+split-specific memory-mapped arrays under the job-local `/tmp` directory. The
+classifier loader converts completed NO2 back to physical units, applies the
+record's AOI statistics, and clips the result to `[-8, 8]`.
 
 Classifier training starts after completion finishes. Neither classifier sees
 the validity mask, and the vision encoder starts from random weights.

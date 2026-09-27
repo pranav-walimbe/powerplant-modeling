@@ -39,6 +39,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from config import (
+    DATASET_AOI_NORMALIZATION_STATS,
     MODEL_CLASS_NAMES,
     MODEL_IMAGE_CHANNELS,
     MODEL_IMAGE_CLIP_ABS,
@@ -496,7 +497,7 @@ def main() -> None:
     del masked_model_checkpoint
     save_stats(stats, run_dir / "normalization_stats.json")
 
-    source_datasets = {split: NOxDataset(split, stats) for split in ("train", "val", "test")}
+    source_datasets = {split: NOxDataset(split, stats, aoi_normalize_no2=False) for split in ("train", "val", "test")}
     masked_checkpoint_sha256 = _checkpoint_sha256(masked_checkpoint_path)
     completed_dir = completed_root / run_name
     completed_paths = _fill_missing_rasters(
@@ -641,6 +642,9 @@ def main() -> None:
         "image_keys": list(stats.image_keys),
         "image_center": list(stats.image_center),
         "image_scale": list(stats.image_scale),
+        "no2_normalization": "aoi_specific_median_robust_scale",
+        "aoi_normalization_stats": DATASET_AOI_NORMALIZATION_STATS,
+        "weather_normalization": "global_pretrained_model_stats",
         "image_clip_range": [-MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS],
         "target_name": MODEL_TARGET_COL,
         "class_names": list(MODEL_CLASS_NAMES),

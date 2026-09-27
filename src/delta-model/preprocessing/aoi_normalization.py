@@ -18,8 +18,8 @@ from preprocessing.generate_dataset_utils import (
 from preprocessing.stratify_utils import AOI_ID_COL
 
 from config import (
+    DATASET_AOI_NORMALIZATION_STATS,
     DATASET_DF,
-    DATASET_DIR,
     DATASET_TEMPO_CACHE_DIR,
     DATASET_WORKERS_PER_SHARD,
     TEMPO_AOI_MAPPING,
@@ -27,7 +27,7 @@ from config import (
     VIS_DIR,
 )
 
-DEFAULT_OUTPUT = Path(DATASET_DIR) / "aoi-no2-normalization.json"
+DEFAULT_OUTPUT = Path(DATASET_AOI_NORMALIZATION_STATS)
 DEFAULT_PLOT_OUTPUT = Path(VIS_DIR) / "aoi-no2-normalization.png"
 DEFAULT_RASTERS_PER_MONTH = 40
 DEFAULT_RANDOM_SEED = 42
