@@ -1,68 +1,52 @@
-# Previous modeling results
+# Modeling results
 
-Run: `delta_nox_classification_20260917_184122`
+Run: `delta_category_classification_20260927_042746`
 
 ## Run summary
 
 | Item | Value |
 |---|---|
 | Seed | 42 |
-| Train / validation / test rows | 83,764 / 21,244 / 22,746 |
-| Unique train / validation / test records | 58,860 / 15,940 / 15,562 |
-| Train / validation / test AOIs | 556 / 107 / 134 |
-| Target | Sign of causal effective NOx change outside a 100 lb deadband |
-| Raster sequence | Five 24 × 24 hourly frames |
-| Raster inputs | NO2, validity mask, 2 m temperature, and 80 m winds |
-| Tabular inputs | Plant attributes, prior-quarter activity, solar hour, and day of year |
-| Raster model | Independent ConvGRU |
-| Tabular model | Independent MLP |
+| Train / validation / test records | 74,241 / 15,164 / 16,417 |
+| Train / validation / test AOIs | 351 / 89 / 64 |
+| Target classes | Decrease / steady / increase |
+| Seasonal model | 291-parameter MLP |
+| Vision-seasonal model | 477,923-parameter ConvGRU fusion model |
+| NO2 completion | Masked-model checkpoint `masked_no2_20260924_183700` |
+| NO2 normalization | AOI-specific median and `IQR / 1.349` |
+| Weather normalization | Global masked-model statistics |
+| Selected seasonal epoch | 16 |
+| Selected vision-seasonal epoch | 2 |
 
-## Balanced split metrics
+## Split metrics
 
-| Split | Model | Accuracy | Balanced accuracy | Precision | TPR | TNR | F1 | AUROC |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| Train | Raster ConvGRU | 0.8578 | 0.8578 | 0.8355 | 0.8911 | 0.8246 | 0.8624 | 0.9095 |
-| Train | Tabular MLP | 0.8478 | 0.8478 | 0.8357 | 0.8659 | 0.8298 | 0.8505 | 0.9180 |
-| Validation | Raster ConvGRU | 0.7915 | 0.7915 | 0.7821 | 0.8080 | 0.7749 | 0.7949 | 0.8441 |
-| Validation | Tabular MLP | 0.7643 | 0.7643 | 0.7888 | 0.7217 | 0.8068 | 0.7538 | 0.8418 |
-| Test | Raster ConvGRU | 0.7700 | 0.7700 | 0.7343 | 0.8462 | 0.6938 | 0.7863 | 0.8357 |
-| Test | Tabular MLP | 0.7525 | 0.7525 | 0.7191 | 0.8289 | 0.6762 | 0.7701 | 0.8107 |
+| Split | Model | Accuracy | Balanced accuracy | Macro F1 | Macro AUROC |
+|---|---|---:|---:|---:|---:|
+| Train | Seasonal | 0.5377 | 0.5103 | 0.4929 | 0.7056 |
+| Train | Vision-seasonal | 0.5725 | 0.5451 | 0.5473 | 0.7470 |
+| Validation | Seasonal | 0.5555 | 0.5360 | 0.5164 | 0.7172 |
+| Validation | Vision-seasonal | 0.5824 | 0.5655 | 0.5696 | 0.7383 |
+| Test | Seasonal | 0.5331 | 0.4909 | 0.4504 | 0.6923 |
+| Test | Vision-seasonal | 0.5983 | 0.5079 | 0.5036 | 0.7433 |
 
-## Balanced test metrics by absolute emissions-change tertile
+## Per-class recall
 
-| Absolute change | Range (lb) | Rows | Model | Accuracy | AUROC |
-|---|---:|---:|---|---:|---:|
-| Low | 100.0–132.4 | 7,582 | Raster ConvGRU | 0.7609 | 0.8396 |
-| Low | 100.0–132.4 | 7,582 | Tabular MLP | 0.7576 | 0.8168 |
-| Middle | 132.4–201.0 | 7,582 | Raster ConvGRU | 0.7824 | 0.8410 |
-| Middle | 132.4–201.0 | 7,582 | Tabular MLP | 0.7580 | 0.8200 |
-| High | 201.0–4,300.3 | 7,582 | Raster ConvGRU | 0.7668 | 0.8258 |
-| High | 201.0–4,300.3 | 7,582 | Tabular MLP | 0.7420 | 0.7967 |
+| Split | Model | Decrease | Steady | Increase |
+|---|---|---:|---:|---:|
+| Train | Seasonal | 0.5342 | 0.2126 | 0.7841 |
+| Train | Vision-seasonal | 0.4079 | 0.4570 | 0.7706 |
+| Validation | Seasonal | 0.6181 | 0.2280 | 0.7618 |
+| Validation | Vision-seasonal | 0.5330 | 0.4376 | 0.7260 |
+| Test | Seasonal | 0.4601 | 0.1915 | 0.8209 |
+| Test | Vision-seasonal | 0.2806 | 0.3582 | 0.8850 |
 
-## Balanced test metrics by AOI stratum
+## Test accuracy by AOI characteristic
 
-| Stratum | Rows | AOIs | Model | Accuracy | AUROC |
-|---|---:|---:|---|---:|---:|
-| Prior-quarter coal generation share ≥ 50% | 11,184 | 48 | Raster ConvGRU | 0.7410 | 0.7973 |
-| Prior-quarter coal generation share ≥ 50% | 11,184 | 48 | Tabular MLP | 0.7283 | 0.7875 |
-| Major-city distance ≥ 50 km | 10,735 | 84 | Raster ConvGRU | 0.7590 | 0.8241 |
-| Major-city distance ≥ 50 km | 10,735 | 84 | Tabular MLP | 0.7372 | 0.8038 |
-| Both strata | 6,081 | 35 | Raster ConvGRU | 0.7597 | 0.8073 |
-| Both strata | 6,081 | 35 | Tabular MLP | 0.7264 | 0.7857 |
-
-## Unique-record metrics
-
-| Split or stratum | Records | AOIs | Model | Accuracy | Balanced accuracy | AUROC |
-|---|---:|---:|---|---:|---:|---:|
-| Train | 58,860 | 556 | Raster ConvGRU | 0.8742 | 0.8619 | 0.9126 |
-| Train | 58,860 | 556 | Tabular MLP | 0.8596 | 0.8550 | 0.9231 |
-| Validation | 15,940 | 107 | Raster ConvGRU | 0.7971 | 0.7916 | 0.8442 |
-| Validation | 15,940 | 107 | Tabular MLP | 0.7502 | 0.7644 | 0.8420 |
-| Test | 15,562 | 134 | Raster ConvGRU | 0.8090 | 0.7770 | 0.8409 |
-| Test | 15,562 | 134 | Tabular MLP | 0.7910 | 0.7586 | 0.8160 |
-| Test: prior-quarter coal generation share ≥ 50% | 7,544 | 48 | Raster ConvGRU | 0.7549 | 0.7507 | 0.8052 |
-| Test: prior-quarter coal generation share ≥ 50% | 7,544 | 48 | Tabular MLP | 0.7735 | 0.7414 | 0.7928 |
-| Test: major-city distance ≥ 50 km | 6,685 | 84 | Raster ConvGRU | 0.7928 | 0.7774 | 0.8303 |
-| Test: major-city distance ≥ 50 km | 6,685 | 84 | Tabular MLP | 0.7687 | 0.7520 | 0.8054 |
-| Test: both strata | 3,834 | 35 | Raster ConvGRU | 0.7770 | 0.7741 | 0.8186 |
-| Test: both strata | 3,834 | 35 | Tabular MLP | 0.7679 | 0.7486 | 0.7896 |
+| Characteristic | Stratum | AOIs | Records | Seasonal | Vision-seasonal | Difference |
+|---|---|---:|---:|---:|---:|---:|
+| Average heat input | Low | 21 | 5,488 | 0.5375 | 0.6039 | +0.0663 |
+| Average heat input | Middle | 22 | 5,916 | 0.5546 | 0.6077 | +0.0531 |
+| Average heat input | High | 21 | 5,013 | 0.5029 | 0.5813 | +0.0784 |
+| Total unit count | Low | 21 | 3,199 | 0.2488 | 0.3951 | +0.1463 |
+| Total unit count | Middle | 22 | 6,907 | 0.5826 | 0.6428 | +0.0602 |
+| Total unit count | High | 21 | 6,311 | 0.6230 | 0.6527 | +0.0296 |
