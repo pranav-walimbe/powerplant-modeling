@@ -9,6 +9,7 @@ Class accuracy is recall within each true class.
 | Baseline with AOI-specific NO2 normalization and 64-channel vision model | `delta_category_classification_20260927_042746` | 0.5983 | 0.2806 | 0.3582 | 0.8850 |
 | Capacity step-down from 64 to 48 vision channels | `delta_category_classification_20260927_061047` | 0.5887 | 0.3180 | 0.3100 | 0.8903 |
 | Soft cross-entropy with AOI-threshold targets and tau 0.05 on the 48-channel model | `delta_category_classification_20260927_065341` | 0.5863 | 0.3426 | 0.3326 | 0.8600 |
+| Independent seasonal and vision-only models with hard CE and 48 vision channels | `delta_category_classification_20260927_071252` | 0.5991 | 0.1151 | 0.3577 | 0.9392 |
 
 ## Baseline run details
 
