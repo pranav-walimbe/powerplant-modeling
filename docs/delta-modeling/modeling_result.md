@@ -13,6 +13,22 @@ Class accuracy is recall within each true class.
 | Jointly trained seasonal and raster embedding fusion with hard CE and 48 vision channels | `delta_category_classification_20260927_073123` | 0.6092 | 0.3120 | 0.3656 | 0.8920 |
 | Jointly trained seasonal FiLM conditioning on the post-ConvGRU feature map with hard CE and 48 vision channels | `delta_category_classification_20260927_074252` | 0.5909 | 0.3820 | 0.3349 | 0.8554 |
 
+## Naive-fusion input ablation
+
+Run: `delta_input_ablation_20260927_170425`. We retrained each variant from scratch with hard cross-entropy.
+
+| Variant | Overall test accuracy | Change from full | Decrease accuracy | Steady accuracy | Increase accuracy |
+|---|---:|---:|---:|---:|---:|
+| Full | 0.6092 | +0.0000 | 0.3120 | 0.3656 | 0.8920 |
+| No solar hour | 0.5957 | -0.0135 | 0.1683 | 0.3640 | 0.9104 |
+| No day of year | 0.5830 | -0.0262 | 0.2468 | 0.4074 | 0.8255 |
+| No t0 | 0.5779 | -0.0313 | 0.3688 | 0.2075 | 0.9311 |
+| No t1 | 0.6202 | +0.0110 | 0.2713 | 0.4841 | 0.8361 |
+| No t2 | 0.5874 | -0.0218 | 0.3362 | 0.2522 | 0.9266 |
+| No t3 | 0.5884 | -0.0208 | 0.3321 | 0.2546 | 0.9280 |
+| No wind | 0.5971 | -0.0121 | 0.3366 | 0.3638 | 0.8603 |
+| No temperature | 0.5397 | -0.0695 | 0.4026 | 0.1458 | 0.8883 |
+
 ## Baseline run details
 
 Run: `delta_category_classification_20260927_042746`
