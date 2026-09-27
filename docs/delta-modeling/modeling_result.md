@@ -12,6 +12,7 @@ Class accuracy is recall within each true class.
 | Independent seasonal and vision-only models with hard CE and 48 vision channels | `delta_category_classification_20260927_071252` | 0.5991 | 0.1151 | 0.3577 | 0.9392 |
 | Jointly trained seasonal and raster embedding fusion with hard CE and 48 vision channels | `delta_category_classification_20260927_073123` | 0.6092 | 0.3120 | 0.3656 | 0.8920 |
 | Jointly trained seasonal FiLM conditioning on the post-ConvGRU feature map with hard CE and 48 vision channels | `delta_category_classification_20260927_074252` | 0.5909 | 0.3820 | 0.3349 | 0.8554 |
+| Learned fusion with per-timestep upwind-sector median NO2 background subtraction, hard CE, and 48 vision channels | `delta_upwind_normalization_20260927_181056` | 0.6057 | 0.3325 | 0.3857 | 0.8627 |
 
 ## Naive-fusion input ablation
 
