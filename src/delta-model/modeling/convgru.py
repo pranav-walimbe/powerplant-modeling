@@ -9,10 +9,16 @@ from config import MODEL_CLASS_NAMES, MODEL_IMAGE_CHANNELS
 
 DEFAULT_HEAD_DIM = 64
 DEFAULT_DROPOUT = 0.20
-VISION_EMBEDDING_DIM = 64
-CONVGRU_HIDDEN_CHANNELS = 64
+DEFAULT_MODEL_WIDTH = 64
 ENCODER_ARCHITECTURE_NAME = "convolutional_raster_frame_encoder_v1"
 ENCODER_OUTPUT_CHANNELS = 64
+
+
+def _model_channels(model_width: int) -> tuple[int, int, int, int]:
+    # Scale every vision stage from one width while retaining integral quarter steps
+    if model_width <= 0 or model_width % 4:
+        raise ValueError("Model width must be a positive multiple of four")
+    return model_width // 4, model_width // 2, 3 * model_width // 4, model_width
 
 
 def _group_norm(channels: int) -> nn.GroupNorm:
@@ -67,25 +73,26 @@ class NO2Stem(nn.Module):
 class RasterFrameEncoder(nn.Module):
     """Encode one completed NO2 and weather frame with ordinary convolutions."""
 
-    def __init__(self) -> None:
+    def __init__(self, model_width: int = DEFAULT_MODEL_WIDTH) -> None:
         super().__init__()
-        self.no2_stem = NO2Stem(out_channels=16)
+        stem_channels, fusion_channels, middle_channels, output_channels = _model_channels(model_width)
+        self.no2_stem = NO2Stem(out_channels=stem_channels)
         self.weather_stem = nn.Sequential(
-            nn.Conv2d(MODEL_IMAGE_CHANNELS - 1, 16, kernel_size=5, padding=2, bias=False),
-            _group_norm(16),
+            nn.Conv2d(MODEL_IMAGE_CHANNELS - 1, stem_channels, kernel_size=5, padding=2, bias=False),
+            _group_norm(stem_channels),
             nn.SiLU(inplace=True),
         )
         self.stem_fusion = nn.Sequential(
-            nn.Conv2d(32, 32, kernel_size=1, bias=False),
-            _group_norm(32),
+            nn.Conv2d(2 * stem_channels, fusion_channels, kernel_size=1, bias=False),
+            _group_norm(fusion_channels),
             nn.SiLU(inplace=True),
         )
         self.spatial_encoder = nn.Sequential(
-            ResidualBlock(32, 32),
-            ResidualBlock(32, 48, stride=2),
-            ResidualBlock(48, 48),
-            ResidualBlock(48, ENCODER_OUTPUT_CHANNELS, stride=2),
-            ResidualBlock(ENCODER_OUTPUT_CHANNELS, ENCODER_OUTPUT_CHANNELS),
+            ResidualBlock(fusion_channels, fusion_channels),
+            ResidualBlock(fusion_channels, middle_channels, stride=2),
+            ResidualBlock(middle_channels, middle_channels),
+            ResidualBlock(middle_channels, output_channels, stride=2),
+            ResidualBlock(output_channels, output_channels),
         )
 
     def forward(self, no2: torch.Tensor, weather: torch.Tensor) -> torch.Tensor:
@@ -117,21 +124,24 @@ class RasterConvGRUClassifier(nn.Module):
     def __init__(
         self,
         *,
+        model_width: int = DEFAULT_MODEL_WIDTH,
         head_dim: int = DEFAULT_HEAD_DIM,
         dropout: float = DEFAULT_DROPOUT,
     ) -> None:
         super().__init__()
-        self.frame_encoder = RasterFrameEncoder()
-        self.temporal_encoder = ConvGRUCell(ENCODER_OUTPUT_CHANNELS, CONVGRU_HIDDEN_CHANNELS)
+        _model_channels(model_width)
+        self.model_width = model_width
+        self.frame_encoder = RasterFrameEncoder(model_width)
+        self.temporal_encoder = ConvGRUCell(model_width, model_width)
         self.vision_projection = nn.Sequential(
-            nn.Linear(2 * CONVGRU_HIDDEN_CHANNELS, VISION_EMBEDDING_DIM),
-            nn.LayerNorm(VISION_EMBEDDING_DIM),
+            nn.Linear(2 * model_width, model_width),
+            nn.LayerNorm(model_width),
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
         )
 
         self.classifier = nn.Sequential(
-            nn.Linear(VISION_EMBEDDING_DIM, head_dim),
+            nn.Linear(model_width, head_dim),
             nn.LayerNorm(head_dim),
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
@@ -150,7 +160,7 @@ class RasterConvGRUClassifier(nn.Module):
 
         hidden = encoded.new_zeros(
             batch_size,
-            CONVGRU_HIDDEN_CHANNELS,
+            self.model_width,
             encoded.shape[-2],
             encoded.shape[-1],
         )
@@ -181,10 +191,11 @@ class VisionSeasonalFusionClassifier(RasterConvGRUClassifier):
         n_features: int,
         seasonal_state_dict: dict[str, torch.Tensor],
         *,
+        model_width: int = DEFAULT_MODEL_WIDTH,
         head_dim: int = DEFAULT_HEAD_DIM,
         dropout: float = DEFAULT_DROPOUT,
     ) -> None:
-        super().__init__(head_dim=head_dim, dropout=dropout)
+        super().__init__(model_width=model_width, head_dim=head_dim, dropout=dropout)
         self.seasonal_model = SeasonalMLP(n_features)
         self.seasonal_model.load_state_dict(seasonal_state_dict)
         self.seasonal_model.requires_grad_(False)
