@@ -57,7 +57,8 @@ srun python -u -m modeling.train \
     --workers "${SLURM_CPUS_PER_TASK}" \
     --prefetch-factor 2 \
     --seed 42 \
-    --head-dim 64 \
+    --model-width 48 \
+    --head-dim 48 \
     --dropout 0.30 \
     --learning-rate 3e-4 \
     --weight-decay 1e-4 \

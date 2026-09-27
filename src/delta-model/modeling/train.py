@@ -13,6 +13,7 @@ import torch
 from modeling.convgru import (
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
+    DEFAULT_MODEL_WIDTH,
     ENCODER_ARCHITECTURE_NAME,
     ENCODER_OUTPUT_CHANNELS,
     RasterFrameEncoder,
@@ -63,6 +64,14 @@ DEFAULT_GRADIENT_CLIP_NORM = 5.0
 DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
+
+
+def _model_width(value: str) -> int:
+    # Parse a vision width that preserves integral quarter-width stages
+    width = int(value)
+    if width <= 0 or width % 4:
+        raise argparse.ArgumentTypeError("must be a positive multiple of four")
+    return width
 
 
 def _group_norm(channels: int) -> nn.GroupNorm:
@@ -173,6 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=min(DEFAULT_WORKERS, NUM_CORES))
     parser.add_argument("--prefetch-factor", type=int, default=DEFAULT_PREFETCH_FACTOR)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--model-width", type=_model_width, default=DEFAULT_MODEL_WIDTH)
     parser.add_argument("--head-dim", type=int, default=DEFAULT_HEAD_DIM)
     parser.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
@@ -571,6 +581,7 @@ def main() -> None:
     vision_model = VisionSeasonalFusionClassifier(
         len(MODEL_FEATURE_NAMES),
         seasonal_state_dict,
+        model_width=args.model_width,
         head_dim=args.head_dim,
         dropout=args.dropout,
     ).to(device)
@@ -588,6 +599,7 @@ def main() -> None:
         checkpoint_metadata={
             **common_checkpoint_metadata,
             "encoder_architecture": ENCODER_ARCHITECTURE_NAME,
+            "model_width": args.model_width,
             "encoder_initialization": "random",
             "fusion": "frozen_seasonal_plus_vision_logits",
         },
@@ -603,6 +615,7 @@ def main() -> None:
         "maximum_epochs": args.epochs,
         "learning_rate": args.learning_rate,
         "parameters": vision_model.num_params(),
+        "model_width": args.model_width,
         "best_validation_loss": vision_best_loss,
         "encoder_initialization": "random",
         "seasonal_model_frozen": True,
@@ -625,6 +638,7 @@ def main() -> None:
         "prefetch_factor": args.prefetch_factor,
         "seed": args.seed,
         "head_dim": args.head_dim,
+        "model_width": args.model_width,
         "dropout": args.dropout,
         "learning_rate": args.learning_rate,
         "seasonal_learning_rate": args.seasonal_learning_rate,

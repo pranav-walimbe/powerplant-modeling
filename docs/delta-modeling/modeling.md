@@ -80,11 +80,11 @@ lowest-validation-loss checkpoint.
 
 The trainer copies the selected seasonal MLP into the combined model and freezes
 all of its parameters. A frame encoder maps each completed raster to a
-`64 x 6 x 6` feature map. A 64-channel ConvGRU processes the five maps in time
-order. Global average and maximum pooling feed a 64-value projection and a
-64-value classification head.
+`48 x 6 x 6` feature map. A 48-channel ConvGRU processes the five maps in time
+order. Global average and maximum pooling feed a 48-value projection and a
+48-value classification head.
 
-The vision branch has 477,923 trainable parameters. It produces three residual
+The vision branch has 269,547 trainable parameters. It produces three residual
 logits, which the model adds to the frozen seasonal logits. The trainer
 zero-initializes the final residual layer, so vision training starts from the
 selected seasonal prediction. Subtracting the two models' accuracy shows the
@@ -114,7 +114,7 @@ mixed precision, and early stopping. Defaults allow 75 seasonal epochs and 100
 vision epochs. Training stops after 15 epochs without a lower validation loss;
 the scheduler halves the learning rate after 10 such epochs. The maintained
 Slurm launcher uses a batch size of 128, a vision learning rate of `3e-4`, a
-64-value head, 30% dropout, and seed 42.
+48-channel vision width, a 48-value head, 30% dropout, and seed 42.
 
 Run the production workflow with:
 
