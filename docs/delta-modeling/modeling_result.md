@@ -1,8 +1,24 @@
 # Modeling results
 
+## Experiment log
+
+| Run | Change | Vision width | Head | Vision parameters | Selected epoch | Validation loss |
+|---|---|---:|---:|---:|---:|---:|
+| `delta_category_classification_20260927_042746` | AOI-normalized baseline | 64 | 64 | 477,923 | 2 | 0.9179 |
+| `delta_category_classification_20260927_061047` | Width-48 step-down | 48 | 48 | 269,547 | 3 | 0.9194 |
+
+| Run | Split | Accuracy | Balanced accuracy | Macro F1 | Macro AUROC |
+|---|---|---:|---:|---:|---:|
+| `20260927_042746` | Validation | 0.5824 | 0.5655 | 0.5696 | 0.7383 |
+| `20260927_042746` | Test | 0.5983 | 0.5079 | 0.5036 | 0.7433 |
+| `20260927_061047` | Validation | 0.5838 | 0.5666 | 0.5676 | 0.7398 |
+| `20260927_061047` | Test | 0.5887 | 0.5061 | 0.4948 | 0.7422 |
+
+## Baseline run details
+
 Run: `delta_category_classification_20260927_042746`
 
-## Run summary
+### Run summary
 
 | Item | Value |
 |---|---|
@@ -18,7 +34,7 @@ Run: `delta_category_classification_20260927_042746`
 | Selected seasonal epoch | 16 |
 | Selected vision-seasonal epoch | 2 |
 
-## Split metrics
+### Split metrics
 
 | Split | Model | Accuracy | Balanced accuracy | Macro F1 | Macro AUROC |
 |---|---|---:|---:|---:|---:|
@@ -29,7 +45,7 @@ Run: `delta_category_classification_20260927_042746`
 | Test | Seasonal | 0.5331 | 0.4909 | 0.4504 | 0.6923 |
 | Test | Vision-seasonal | 0.5983 | 0.5079 | 0.5036 | 0.7433 |
 
-## Per-class recall
+### Per-class recall
 
 | Split | Model | Decrease | Steady | Increase |
 |---|---|---:|---:|---:|
@@ -40,7 +56,7 @@ Run: `delta_category_classification_20260927_042746`
 | Test | Seasonal | 0.4601 | 0.1915 | 0.8209 |
 | Test | Vision-seasonal | 0.2806 | 0.3582 | 0.8850 |
 
-## Test accuracy by AOI characteristic
+### Test accuracy by AOI characteristic
 
 | Characteristic | Stratum | AOIs | Records | Seasonal | Vision-seasonal | Difference |
 |---|---|---:|---:|---:|---:|---:|
