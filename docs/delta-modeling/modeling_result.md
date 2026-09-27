@@ -15,6 +15,7 @@ Class accuracy is recall within each true class.
 | Learned fusion with per-timestep upwind-sector median NO2 background subtraction, hard CE, and 48 vision channels | `delta_upwind_normalization_20260927_181056` | 0.6057 | 0.3325 | 0.3857 | 0.8627 |
 | Learned fusion initialized from the masked autoencoder encoder, frozen for five epochs then fine-tuned, with hard CE | `delta_pretrained_masked_encoder_20260927_183044` | 0.5422 | 0.3651 | 0.1596 | 0.8946 |
 | Learned fusion trained from raw masked rasters with a partial-convolution NO2 stem, no imputation, and hard CE | `delta_raw_mask_partial_conv_20260927_184440` | 0.6049 | 0.3192 | 0.3763 | 0.8724 |
+| Learned fusion with globally normalized pre-filled NO2 rasters, hard CE, and 48 vision channels | `delta_category_classification_20260927_194932` | 0.6004 | 0.3096 | 0.3224 | 0.9079 |
 
 ## Naive-fusion input ablation
 
