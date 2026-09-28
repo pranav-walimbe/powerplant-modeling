@@ -67,14 +67,6 @@ DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
 
 
-def _model_width(value: str) -> int:
-    # Parse a vision width that preserves integral quarter-width stages
-    width = int(value)
-    if width <= 0 or width % 4:
-        raise argparse.ArgumentTypeError("must be a positive multiple of four")
-    return width
-
-
 def _group_norm(channels: int) -> nn.GroupNorm:
     # Match the normalization layout stored in masked-model checkpoints
     groups = min(8, channels)
@@ -183,7 +175,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=min(DEFAULT_WORKERS, NUM_CORES))
     parser.add_argument("--prefetch-factor", type=int, default=DEFAULT_PREFETCH_FACTOR)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--model-width", type=_model_width, default=DEFAULT_MODEL_WIDTH)
+    parser.add_argument("--model-width", type=int, default=DEFAULT_MODEL_WIDTH)
     parser.add_argument("--head-dim", type=int, default=DEFAULT_HEAD_DIM)
     parser.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)

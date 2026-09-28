@@ -14,13 +14,6 @@ ENCODER_ARCHITECTURE_NAME = "convolutional_raster_frame_encoder_v1"
 ENCODER_OUTPUT_CHANNELS = 64
 
 
-def _model_channels(model_width: int) -> tuple[int, int, int, int]:
-    # Scale every vision stage from one width while retaining integral quarter steps
-    if model_width <= 0 or model_width % 4:
-        raise ValueError("Model width must be a positive multiple of four")
-    return model_width // 4, model_width // 2, 3 * model_width // 4, model_width
-
-
 def _group_norm(channels: int) -> nn.GroupNorm:
     groups = min(8, channels)
     while channels % groups:
@@ -75,7 +68,9 @@ class RasterFrameEncoder(nn.Module):
 
     def __init__(self, model_width: int = DEFAULT_MODEL_WIDTH) -> None:
         super().__init__()
-        stem_channels, fusion_channels, middle_channels, output_channels = _model_channels(model_width)
+        stem_channels = model_width // 4
+        fusion_channels = model_width // 2
+        middle_channels = 3 * model_width // 4
         self.no2_stem = NO2Stem(out_channels=stem_channels)
         self.weather_stem = nn.Sequential(
             nn.Conv2d(MODEL_IMAGE_CHANNELS - 1, stem_channels, kernel_size=5, padding=2, bias=False),
@@ -91,8 +86,8 @@ class RasterFrameEncoder(nn.Module):
             ResidualBlock(fusion_channels, fusion_channels),
             ResidualBlock(fusion_channels, middle_channels, stride=2),
             ResidualBlock(middle_channels, middle_channels),
-            ResidualBlock(middle_channels, output_channels, stride=2),
-            ResidualBlock(output_channels, output_channels),
+            ResidualBlock(middle_channels, model_width, stride=2),
+            ResidualBlock(model_width, model_width),
         )
 
     def forward(self, no2: torch.Tensor, weather: torch.Tensor) -> torch.Tensor:
@@ -129,7 +124,6 @@ class RasterConvGRUClassifier(nn.Module):
         dropout: float = DEFAULT_DROPOUT,
     ) -> None:
         super().__init__()
-        _model_channels(model_width)
         self.model_width = model_width
         self.frame_encoder = RasterFrameEncoder(model_width)
         self.temporal_encoder = ConvGRUCell(model_width, model_width)
