@@ -57,7 +57,8 @@ srun python -u -m modeling.train \
     --workers "${SLURM_CPUS_PER_TASK}" \
     --prefetch-factor 2 \
     --seed 42 \
-    --head-dim 64 \
+    --model-width 48 \
+    --head-dim 48 \
     --dropout 0.30 \
     --learning-rate 3e-4 \
     --weight-decay 1e-4 \
@@ -74,7 +75,7 @@ if [[ -z "${run_dir}" ]]; then
     exit 1
 fi
 
-echo "Emailing split accuracy, training curves, and characteristic results"
+echo "Emailing seasonal and learned-fusion results"
 bash scripts/slurm/email_model_results.sh \
     "${run_dir}" \
     "${SLURM_JOB_ID}" \
