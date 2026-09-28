@@ -11,8 +11,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
 import polars as pl
-from preprocessing.diagnostic_plots import plot_post_filter_window_behavior
 from preprocessing.generate_dataset_utils import (
     CANDIDATE_FEATURE_SCHEMA,
     CANDIDATE_RASTER_PATH_COL,
@@ -52,6 +53,8 @@ from config import (
     MIN_TIMESTEP_NO2_FINITE_FRACTION,
     NUM_CORES,
     SEQUENCE_TIMESTEPS,
+    STRATIFICATION_WINDOW_ABSOLUTE_FLOOR,
+    STRATIFICATION_WINDOW_RELATIVE_FLOOR,
     TEMPO_DIR,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
@@ -81,6 +84,9 @@ SHARD_FINALIZER_JOB_NAME = "generate-dataset-finalize"
 TRAINING_JOB_NAME = "train-no2"
 RUN_STARTED_ENV = "DATASET_RUN_STARTED_AT"
 POST_FILTER_DIAGNOSTIC_PREFIX = "dataset-window-behavior"
+DELTA_CATEGORY_COL = "delta_category"
+CLASS_NAMES = ("decrease", "steady", "increase")
+CLASS_COLORS = ("#3977af", "#999999", "#d65f4a")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DATASET_BATCH_SCRIPT = REPOSITORY_ROOT / "scripts" / "slurm" / "generate_dataset.sh"
 SHARD_INPUT_DIRECTORY = Path(DATASET_DIR) / "shard-inputs"
@@ -559,6 +565,43 @@ def _post_filter_diagnostic_path() -> Path:
     return Path(VIS_DIR) / f"{POST_FILTER_DIAGNOSTIC_PREFIX}-{job_id}.png"
 
 
+def _plot_post_filter_window_behavior(splits: dict[str, pl.DataFrame], output_path: Path) -> None:
+    # Plot emissions trajectories for records that survived raster filtering
+    figure, raw_axes = plt.subplots(1, len(splits), figsize=(16, 4.8), constrained_layout=True)
+    axes = [raw_axes] if len(splits) == 1 else list(raw_axes)
+    positions = np.arange(SEQUENCE_TIMESTEPS)
+    for column_index, ((split_name, frame), axis) in enumerate(zip(splits.items(), axes, strict=True)):
+        for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
+            class_frame = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
+            if class_frame.is_empty():
+                continue
+            values = np.column_stack(
+                [class_frame[f"t{index}_nox"].to_numpy() for index in range(SEQUENCE_TIMESTEPS)]
+            )
+            median = np.median(values, axis=0)
+            lower, upper = np.quantile(values, (0.25, 0.75), axis=0)
+            axis.plot(positions, median, marker="o", color=color, label=class_name.title())
+            axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
+        axis.set(
+            title=f"{split_name.title()}: {frame.height:,} records, {frame['aoi_id'].n_unique():,} AOIs",
+            xlabel="TEMPO timestep",
+            ylabel="Interpolated NOx (lb/hr)",
+            xticks=positions,
+            xticklabels=[f"t{index}" for index in positions],
+        )
+        axis.grid(alpha=0.2)
+        if column_index == 0:
+            axis.legend()
+    figure.suptitle(
+        "Five-timestep emissions behavior after raster filtering\n"
+        f"Threshold: max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
+        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint); lines show median and IQR"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_path, dpi=180)
+    plt.close(figure)
+
+
 def _run_shard(task: ShardTask, store: DatasetShardStore, batch_size: int, workers: int) -> None:
     # Generate locality batches into the shard's existing output layout
     started_at = time.perf_counter()
@@ -618,7 +661,7 @@ def _finalize_shards(
     source_splits = _load_splits(split_paths)
     surviving_splits = _write_outputs(output_rows, failures, source_splits)
     diagnostic_path = _post_filter_diagnostic_path()
-    plot_post_filter_window_behavior(surviving_splits, diagnostic_path)
+    _plot_post_filter_window_behavior(surviving_splits, diagnostic_path)
     print(f"Saved post-filter window behavior to {diagnostic_path}")
     elapsed = time.perf_counter() - started_at
     peak_memory_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
