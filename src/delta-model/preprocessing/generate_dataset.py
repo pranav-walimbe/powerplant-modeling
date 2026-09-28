@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import polars as pl
+from preprocessing.diagnostic_plots import plot_post_filter_window_behavior
 from preprocessing.generate_dataset_utils import (
     CANDIDATE_FEATURE_SCHEMA,
     CANDIDATE_RASTER_PATH_COL,
@@ -55,6 +56,7 @@ from config import (
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
     VAL_RECORDS_CSV,
+    VIS_DIR,
 )
 
 SPLIT_PATHS = {
@@ -78,6 +80,7 @@ SHARD_WORKER_JOB_NAME = "generate-dataset-shard"
 SHARD_FINALIZER_JOB_NAME = "generate-dataset-finalize"
 TRAINING_JOB_NAME = "train-no2"
 RUN_STARTED_ENV = "DATASET_RUN_STARTED_AT"
+POST_FILTER_DIAGNOSTIC_PREFIX = "dataset-window-behavior"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DATASET_BATCH_SCRIPT = REPOSITORY_ROOT / "scripts" / "slurm" / "generate_dataset.sh"
 SHARD_INPUT_DIRECTORY = Path(DATASET_DIR) / "shard-inputs"
@@ -480,7 +483,7 @@ def _write_outputs(
     output_rows: dict[str, list[dict[str, object]]],
     failures: dict[str, list[dict[str, object]]],
     source_splits: dict[str, pl.DataFrame],
-) -> None:
+) -> dict[str, pl.DataFrame]:
     # Sort asynchronous results back into source-record order
     candidates_by_split: dict[str, pl.DataFrame] = {}
     failure_frames: dict[str, pl.DataFrame] = {}
@@ -547,6 +550,13 @@ def _write_outputs(
             Path(DATASET_DF) / f"{split}_failures.csv",
         )
         print(f"[{split}] wrote {output_frame.height:,} records; {failure_frame.height:,} processing failures")
+    return candidates_by_split
+
+
+def _post_filter_diagnostic_path() -> Path:
+    # Name the finalizer artifact with its array job ID when available
+    job_id = os.getenv("SLURM_ARRAY_JOB_ID") or os.getenv("SLURM_JOB_ID") or "local"
+    return Path(VIS_DIR) / f"{POST_FILTER_DIAGNOSTIC_PREFIX}-{job_id}.png"
 
 
 def _run_shard(task: ShardTask, store: DatasetShardStore, batch_size: int, workers: int) -> None:
@@ -606,7 +616,10 @@ def _finalize_shards(
         failures[task.split].extend(failure_frame.to_dicts())
 
     source_splits = _load_splits(split_paths)
-    _write_outputs(output_rows, failures, source_splits)
+    surviving_splits = _write_outputs(output_rows, failures, source_splits)
+    diagnostic_path = _post_filter_diagnostic_path()
+    plot_post_filter_window_behavior(surviving_splits, diagnostic_path)
+    print(f"Saved post-filter window behavior to {diagnostic_path}")
     elapsed = time.perf_counter() - started_at
     peak_memory_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     benchmark = f"finalizer_time_seconds={elapsed:.1f}; peak_memory_mib={peak_memory_mib:.1f}"

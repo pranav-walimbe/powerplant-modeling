@@ -8,6 +8,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
+from preprocessing.diagnostic_plots import (
+    CLASS_COLORS,
+    CLASS_NAMES,
+    plot_window_emissions_axes,
+)
 from preprocessing.stratify_utils import (
     AOI_ID_COL,
     LABEL_MODE_COL,
@@ -56,8 +61,6 @@ AOI_SCORE_PERCENTILE_COL = "aoi_score_percentile"
 AVG_NOX_START_COL = "avg_nox_start"
 AVG_NOX_END_COL = "avg_nox_end"
 HYBRID_THRESHOLD_COL = "hybrid_window_threshold"
-CLASS_NAMES = ("decrease", "steady", "increase")
-CLASS_COLORS = ("#3977af", "#999999", "#d65f4a")
 FINAL_TIMESTEP_INDEX = SEQUENCE_TIMESTEPS - 1
 TIMESTEP_COLUMNS = [
     column
@@ -354,29 +357,13 @@ def _plot_stratification_diagnostics(
     # Show class-specific emissions trajectories and split composition
     split_names = tuple(SPLIT_FRACTIONS)
     figure, axes = plt.subplots(2, 3, figsize=(16, 9), constrained_layout=True)
+    plot_window_emissions_axes(
+        {split_name: balanced_splits[split_name] for split_name in split_names},
+        list(axes[0]),
+    )
     for column_index, split_name in enumerate(split_names):
         eligible = eligible_splits[split_name]
         balanced = balanced_splits[split_name]
-        trajectory_axis = axes[0, column_index]
-        for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
-            class_frame = balanced.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
-            values = np.column_stack([class_frame[f"t{index}_nox"].to_numpy() for index in range(SEQUENCE_TIMESTEPS)])
-            median = np.median(values, axis=0)
-            lower, upper = np.quantile(values, (0.25, 0.75), axis=0)
-            positions = np.arange(SEQUENCE_TIMESTEPS)
-            trajectory_axis.plot(positions, median, marker="o", color=color, label=class_name.title())
-            trajectory_axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
-        trajectory_axis.set(
-            title=f"{split_name.title()}: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs",
-            xlabel="TEMPO timestep",
-            ylabel="Interpolated NOx (lb/hr)",
-            xticks=range(SEQUENCE_TIMESTEPS),
-            xticklabels=[f"t{index}" for index in range(SEQUENCE_TIMESTEPS)],
-        )
-        trajectory_axis.grid(alpha=0.2)
-        if column_index == 0:
-            trajectory_axis.legend()
-
         category_counts = dict(eligible.group_by(DELTA_CATEGORY_COL).len().iter_rows())
         eligible_counts = np.array([category_counts.get(category, 0) for category in CLASS_NAMES])
         balanced_count = balanced.height // len(CLASS_NAMES)

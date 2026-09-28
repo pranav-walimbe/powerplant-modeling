@@ -97,8 +97,9 @@ their current batch. Pass `--refresh-tempo`, `--refresh-weather`, or
 changes. Do not regenerate while a model job reads the dataset.
 
 Workers require at least 90% finite NO2 coverage at each timestep. The
-finalizer publishes split CSVs only after it validates all shard outcomes. See
-[regridding.md](regridding.md).
+finalizer publishes split CSVs only after it validates all shard outcomes. It
+also emails a plot of the post-filter emissions trajectories by class and
+split. See [regridding.md](regridding.md).
 
 ## 4. Compute AOI-specific NO2 normalization
 

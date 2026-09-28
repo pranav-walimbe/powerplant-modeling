@@ -48,7 +48,8 @@ The pipeline applies these steps in order:
 10. Generate rasters and reject records that fail coverage or source-file checks.
 
 Raster quality control can change class counts after balancing. The finalizer
-reports those counts and does not rebalance the retained records.
+reports those counts, emails the retained class trajectories, and does not
+rebalance the retained records.
 
 ## Label construction
 
