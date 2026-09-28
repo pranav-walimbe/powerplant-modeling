@@ -15,12 +15,14 @@
 
 set -euo pipefail
 
-repo_dir="/global/home/users/pranavwalimbe/no2-modeling"
+repo_dir="${NO2_REPOSITORY_DIR:-/global/home/users/pranavwalimbe/no2-modeling}"
 strat_dir="/global/scratch/projects/fc_nitrates/ddp/nox/nox_powerplant_data"
 recipient="pranav.walimbe@berkeley.edu"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
 mail_log="/var/log/maillog"
-diagnostic="/global/home/users/pranavwalimbe/vis/stratification-ema-balance-${SLURM_JOB_ID}.png"
+diagnostic="/global/home/users/pranavwalimbe/vis/stratification-window-behavior-${SLURM_JOB_ID}.png"
+monthly_prevalence="/global/home/users/pranavwalimbe/vis/stratification-monthly-prevalence-${SLURM_JOB_ID}.png"
+solar_hour_prevalence="/global/home/users/pranavwalimbe/vis/stratification-solar-hour-prevalence-${SLURM_JOB_ID}.png"
 aoi_characteristics_plot="/global/home/users/pranavwalimbe/vis/stratification-aoi-characteristics-${SLURM_JOB_ID}.png"
 aoi_characteristics_table="/global/home/users/pranavwalimbe/vis/stratification-aoi-characteristics-${SLURM_JOB_ID}.csv"
 aoi_selection_table="/global/home/users/pranavwalimbe/vis/stratification-aoi-selection-${SLURM_JOB_ID}.csv"
@@ -35,40 +37,52 @@ export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
 
 srun python -u -m preprocessing.stratify_plants \
     --diagnostic-output "${diagnostic}" \
+    --monthly-prevalence-output "${monthly_prevalence}" \
+    --solar-hour-prevalence-output "${solar_hour_prevalence}" \
     --aoi-characteristics-plot "${aoi_characteristics_plot}" \
     --aoi-characteristics-output "${aoi_characteristics_table}" \
     --aoi-selection-output "${aoi_selection_table}" \
     "$@"
 
-if [[ ! -s "${diagnostic}" ]]; then
-    echo "Expected stratification diagnostic was not created: ${diagnostic}" >&2
-    exit 1
-fi
-if [[ ! -s "${aoi_characteristics_plot}" ]]; then
-    echo "Expected AOI characteristics dashboard was not created: ${aoi_characteristics_plot}" >&2
-    exit 1
-fi
-if [[ ! -s "${aoi_characteristics_table}" ]]; then
-    echo "Expected AOI characteristics table was not created: ${aoi_characteristics_table}" >&2
-    exit 1
-fi
-if [[ ! -s "${aoi_selection_table}" ]]; then
-    echo "Expected AOI selection audit was not created: ${aoi_selection_table}" >&2
-    exit 1
-fi
+for artifact in \
+    "${diagnostic}" \
+    "${monthly_prevalence}" \
+    "${solar_hour_prevalence}" \
+    "${aoi_characteristics_plot}" \
+    "${aoi_characteristics_table}" \
+    "${aoi_selection_table}"; do
+    if [[ ! -s "${artifact}" ]]; then
+        echo "Expected stratification artifact was not created: ${artifact}" >&2
+        exit 1
+    fi
+done
 train_records=$(($(wc -l < "${strat_dir}/train_records.csv") - 1))
 val_records=$(($(wc -l < "${strat_dir}/val_records.csv") - 1))
 test_records=$(($(wc -l < "${strat_dir}/test_records.csv") - 1))
 total_records=$((train_records + val_records + test_records))
 
+remote_artifacts_visible=false
+for _ in {1..60}; do
+    if ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \
+        "test -s '${diagnostic}' && test -s '${monthly_prevalence}' && test -s '${solar_hour_prevalence}' && test -s '${aoi_characteristics_plot}' && test -s '${aoi_characteristics_table}' && test -s '${aoi_selection_table}'"; then
+        remote_artifacts_visible=true
+        break
+    fi
+    sleep 2
+done
+if [[ "${remote_artifacts_visible}" != true ]]; then
+    echo "Stratification artifacts did not become visible from ${mail_host}" >&2
+    exit 1
+fi
+
 mail_log_offset=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" stat -c %s "${mail_log}")
 printf '%s\n' \
-    'Point-interpolated EMA stratification completed successfully.' \
+    'Five-timestep window stratification completed successfully.' \
     'Selected the half of AOIs with the highest activity-conditioned median NOx.' \
-    'EMA innovation threshold: max(200 lb/hr, 25% of median positive AOI timestep NOx).' \
+    'Change threshold: max(200 lb/hr, 25% of the early-late midpoint).' \
     'Eligible AOIs provide at least 20 candidates in decrease, steady, and increase.' \
-    'Steady-class downsampling favors innovations nearest zero.' \
-    'Four causal rasters retained; the irregular-time EMA uses t0 through t3.' \
+    'Steady-class downsampling favors changes nearest zero; increase and decrease use deterministic random samples.' \
+    'Five causal rasters retained; labels compare time-weighted t0-t2 and t2-t4 averages.' \
     'Each timestep NOx value is linearly interpolated between its surrounding CAMPD hours.' \
     'Filtered AOI clusters were assigned by class to approximately 70/15/15 splits.' \
     'Every split is independently balanced across decrease, steady, and increase.' \
@@ -77,11 +91,13 @@ printf '%s\n' \
     "Test: ${test_records} records" \
     "Total: ${total_records} records" \
     "Diagnostic: ${diagnostic}" \
+    "Monthly prevalence: ${monthly_prevalence}" \
+    "Solar-hour prevalence: ${solar_hour_prevalence}" \
     "AOI characteristics: ${aoi_characteristics_plot}" \
     "AOI characteristics table: ${aoi_characteristics_table}" \
     "AOI selection audit: ${aoi_selection_table}" \
     | ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \
-        "mailx -s 'NO2 stratification diagnostics (${SLURM_JOB_ID})' -a '${diagnostic}' -a '${aoi_characteristics_plot}' -a '${aoi_characteristics_table}' -a '${aoi_selection_table}' '${recipient}'"
+        "mailx -s 'NO2 stratification diagnostics (${SLURM_JOB_ID})' -a '${diagnostic}' -a '${monthly_prevalence}' -a '${solar_hour_prevalence}' -a '${aoi_characteristics_plot}' -a '${aoi_characteristics_table}' -a '${aoi_selection_table}' '${recipient}'"
 
 delivery_confirmed=false
 for _ in {1..30}; do

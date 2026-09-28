@@ -24,7 +24,7 @@ without recreating its construction.
 
 ## Seasonal features
 
-The loader derives all four seasonal features from `t3_timestamp`, the final
+The loader derives all four seasonal features from `t4_timestamp`, the final
 scan aligned with the target. It shifts the UTC timestamp by `longitude / 15`
 hours to obtain local solar time. Daily phase includes hour, minute, second, and
 microsecond. Annual phase uses the resulting local-solar day of year plus the
@@ -80,7 +80,7 @@ lowest-validation-loss checkpoint.
 
 The trainer copies the selected seasonal MLP into the combined model and freezes
 all of its parameters. A frame encoder maps each completed raster to a
-`64 x 6 x 6` feature map. A 64-channel ConvGRU processes the four maps in time
+`64 x 6 x 6` feature map. A 64-channel ConvGRU processes the five maps in time
 order. Global average and maximum pooling feed a 64-value projection and a
 64-value classification head.
 
@@ -92,7 +92,7 @@ effect of adding raster evidence to that prediction.
 
 ```mermaid
 flowchart LR
-    Timestamp[t3 timestamp and longitude] -->|derive phase| SeasonalFeatures[Four seasonal features]
+    Timestamp[t4 timestamp and longitude] -->|derive phase| SeasonalFeatures[Four seasonal features]
     SeasonalFeatures --> SeasonalMLP[Seasonal MLP]
     SeasonalMLP -->|freeze after training| SeasonalLogits[Seasonal logits]
 
