@@ -37,7 +37,7 @@ The pipeline applies these steps in order:
 5. Calculate elapsed-time-weighted trapezoidal means over `t0` through `t2`
    and `t2` through `t4`. Store them as `avg_nox_start` and `avg_nox_end`.
 6. Assign classes from `avg_nox_end - avg_nox_start` using the larger of a
-   200 lb/hr absolute floor or 25% of the midpoint between the two means.
+   200 lb/hr absolute floor or 20% of the midpoint between the two means.
 7. Retain only AOIs providing at least 20 candidate records in every class.
 8. Assign each overlap cluster to one split with a deterministic procedure that
    targets the 70/15/15 ratio for each class.
@@ -64,7 +64,7 @@ avg_nox_start = weighted_mean(t0:t1:t2)
 avg_nox_end = weighted_mean(t2:t3:t4)
 window_change = avg_nox_end - avg_nox_start
 window_midpoint = (avg_nox_start + avg_nox_end) / 2
-hybrid_window_threshold = max(200, 0.25 * window_midpoint)
+hybrid_window_threshold = max(200, 0.20 * window_midpoint)
 ```
 
 Changes at or below the negative threshold are decreases. Changes at or above

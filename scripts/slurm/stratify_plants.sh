@@ -79,7 +79,7 @@ mail_log_offset=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" stat 
 printf '%s\n' \
     'Five-timestep window stratification completed successfully.' \
     'Selected the half of AOIs with the highest activity-conditioned median NOx.' \
-    'Change threshold: max(200 lb/hr, 25% of the early-late midpoint).' \
+    'Change threshold: max(200 lb/hr, 20% of the early-late midpoint).' \
     'Eligible AOIs provide at least 20 candidates in decrease, steady, and increase.' \
     'Steady-class downsampling favors changes nearest zero; increase and decrease use deterministic random samples.' \
     'Five causal rasters retained; labels compare time-weighted t0-t2 and t2-t4 averages.' \
