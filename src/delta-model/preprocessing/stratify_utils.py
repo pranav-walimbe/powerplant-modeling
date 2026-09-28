@@ -10,7 +10,6 @@ from pycanopy import SpatialFrame, distance_to_point
 from pyproj import Transformer
 
 from config import (
-    EMA_DECAY_TIMESCALE_HOURS,
     IMG_RANGE,
     MIN_CITY_POPULATION,
     SEQUENCE_TIMESTEPS,
@@ -182,24 +181,20 @@ def add_tempo_sequences(
     frame: pl.DataFrame,
     observations: pl.DataFrame,
     timesteps: int = SEQUENCE_TIMESTEPS,
-    label_timestep_index: int | None = None,
 ) -> pl.DataFrame:
-    """Match consecutive TEMPO sequences to the label scan's clock hour.
+    """Match consecutive TEMPO sequences to the final scan's clock hour.
 
     Args:
         frame: AOI-hour rows eligible for observation matching.
         observations: AOI scans with timestamps and source path lists.
         timesteps: Number of consecutive scans per record.
-        label_timestep_index: Zero-based scan ending the label interval.
 
     Returns:
         Rows carrying oldest-to-newest scan timestamps and paths.
     """
-    label_index = timesteps - 1 if label_timestep_index is None else label_timestep_index
     if timesteps < 2:
         raise ValueError("TEMPO sequences require at least two timesteps")
-    if not 0 < label_index < timesteps:
-        raise ValueError("label_timestep_index must select a timestep after t0")
+    final_index = timesteps - 1
     time_columns = [f"timestep_time_t{index}" for index in range(timesteps)]
     path_columns = [f"no2_paths_t{index}" for index in range(timesteps)]
     sequences = (
@@ -235,9 +230,9 @@ def add_tempo_sequences(
             )
         )
         .with_columns(
-            pl.col(time_columns[label_index]).dt.date().alias("date"),
-            pl.col(time_columns[label_index]).dt.hour().alias("hour"),
-            pl.col(f"_interval_minutes_{label_index}").alias("label_delta_mins"),
+            pl.col(time_columns[final_index]).dt.date().alias("date"),
+            pl.col(time_columns[final_index]).dt.hour().alias("hour"),
+            pl.col(f"_interval_minutes_{final_index}").alias("label_delta_mins"),
         )
         .select(
             AOI_ID_COL,
@@ -252,47 +247,38 @@ def add_tempo_sequences(
     return frame.join(sequences, on=[AOI_ID_COL, "date", "hour"], how="left")
 
 
-def add_ema_targets(
-    frame: pl.DataFrame,
-    timesteps: int = SEQUENCE_TIMESTEPS,
-    decay_timescale_hours: float = EMA_DECAY_TIMESCALE_HOURS,
-    label_timestep_index: int | None = None,
-) -> pl.DataFrame:
-    """Add an irregular-time EMA over interpolated timestep NOx values.
+def _time_weighted_three_timestep_mean(start_index: int) -> pl.Expr:
+    # Integrate linearly interpolated NOx over two consecutive scan intervals
+    weighted_intervals = []
+    durations = []
+    for index in range(start_index, start_index + 2):
+        duration = (pl.col(f"timestep_time_t{index + 1}") - pl.col(f"timestep_time_t{index}")).dt.total_seconds()
+        weighted_intervals.append(duration * (pl.col(f"t{index}_nox") + pl.col(f"t{index + 1}_nox")) / 2)
+        durations.append(duration)
+    return pl.sum_horizontal(weighted_intervals) / pl.sum_horizontal(durations)
+
+
+def add_window_average_targets(frame: pl.DataFrame) -> pl.DataFrame:
+    """Add elapsed-time-weighted means for the first and last three scans.
 
     Args:
-        frame: TEMPO-matched records carrying configured timestep timestamps.
-        timesteps: Number of interpolated timestep values in the EMA.
-        decay_timescale_hours: Positive exponential e-folding time in hours.
-        label_timestep_index: Zero-based scan ending the current EMA window.
+        frame: Five-scan records carrying timestamps and interpolated NOx values.
 
     Returns:
-        Records with previous and current EMA states plus their difference.
+        Records with ``avg_nox_start``, ``avg_nox_end``, and timestep ages.
     """
-    label_index = timesteps - 1 if label_timestep_index is None else label_timestep_index
-    first_index = label_index - timesteps + 1
-    ema = pl.col(f"t{first_index}_nox")
-    previous_ema = ema
-    for index in range(first_index + 1, label_index + 1):
-        interval_hours = (
-            pl.col(f"timestep_time_t{index}") - pl.col(f"timestep_time_t{index - 1}")
-        ).dt.total_seconds() / SECONDS_PER_HOUR
-        retention = (-interval_hours / decay_timescale_hours).exp()
-        previous_ema = ema
-        ema = retention * ema + (1 - retention) * pl.col(f"t{index}_nox")
-
+    final_time = pl.col(f"timestep_time_t{SEQUENCE_TIMESTEPS - 1}")
     age_columns = [
-        (
-            (pl.col(f"timestep_time_t{label_index}") - pl.col(f"timestep_time_t{index}")).dt.total_seconds()
-            / SECONDS_PER_HOUR
-        ).alias(f"timestep_age_hours_t{index}")
-        for index in range(first_index, label_index + 1)
+        ((final_time - pl.col(f"timestep_time_t{index}")).dt.total_seconds() / SECONDS_PER_HOUR).alias(
+            f"timestep_age_hours_t{index}"
+        )
+        for index in range(SEQUENCE_TIMESTEPS)
     ]
     return frame.with_columns(
         *age_columns,
-        previous_ema.alias("effective_previous_nox"),
-        ema.alias("effective_current_nox"),
-    ).with_columns((pl.col("effective_current_nox") - pl.col("effective_previous_nox")).alias("effective_delta_nox"))
+        _time_weighted_three_timestep_mean(0).alias("avg_nox_start"),
+        _time_weighted_three_timestep_mean(2).alias("avg_nox_end"),
+    )
 
 
 def add_projected_coordinates(frame: pl.DataFrame) -> pl.DataFrame:
@@ -527,9 +513,7 @@ def filter_groups_by_class_count(
     counts = (
         frame.group_by(group_column)
         .agg(*[(pl.col(class_column) == name).sum().alias(f"{name}_records") for name in class_names])
-        .with_columns(
-            pl.min_horizontal(*(f"{name}_records" for name in class_names)).alias("minimum_class_records")
-        )
+        .with_columns(pl.min_horizontal(*(f"{name}_records" for name in class_names)).alias("minimum_class_records"))
         .with_columns((pl.col("minimum_class_records") >= minimum_per_class).alias("meets_class_floor"))
         .sort(group_column)
     )

@@ -13,12 +13,12 @@ from preprocessing.stratify_utils import (
     LABEL_MODE_COL,
     MAJOR_CITY_DIST_COL,
     add_aoi_bounds,
-    add_ema_targets,
     add_major_city_distance,
     add_projected_coordinates,
     add_sequence_weather_paths,
     add_tempo_sequences,
     add_timestep_nox,
+    add_window_average_targets,
     aggregate_aoi_hours,
     build_aoi_membership,
     build_aoi_spatial_frame,
@@ -34,16 +34,13 @@ from preprocessing.stratify_utils import (
 from preprocessing.tempo_mapping import load_tempo_mapping
 
 from config import (
-    EMA_DECAY_TIMESCALE_HOURS,
-    EMA_HISTORY_TIMESTEPS,
     FULL_DATA_PARQUET,
-    LABEL_TIMESTEP_INDEX,
     SEQUENCE_TIMESTEPS,
     STRAT_BASE_DIR,
     STRATIFICATION_AOI_FRACTION,
-    STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR,
-    STRATIFICATION_INNOVATION_RELATIVE_FLOOR,
     STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
+    STRATIFICATION_WINDOW_ABSOLUTE_FLOOR,
+    STRATIFICATION_WINDOW_RELATIVE_FLOOR,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
     VAL_RECORDS_CSV,
@@ -56,11 +53,12 @@ MIN_STEADY_SELECTION_WEIGHT = 0.01
 DELTA_CATEGORY_COL = "delta_category"
 AOI_SCORE_COL = "aoi_score"
 AOI_SCORE_PERCENTILE_COL = "aoi_score_percentile"
-AOI_SCALE_COL = "aoi_active_median_nox"
-EMA_UPDATE_ALPHA_COL = "ema_update_alpha"
-EMA_INNOVATION_COL = "ema_innovation_nox"
-HYBRID_THRESHOLD_COL = "hybrid_innovation_threshold"
-EMA_BUCKET_NAMES = ("decrease", "steady", "increase")
+AVG_NOX_START_COL = "avg_nox_start"
+AVG_NOX_END_COL = "avg_nox_end"
+HYBRID_THRESHOLD_COL = "hybrid_window_threshold"
+CLASS_NAMES = ("decrease", "steady", "increase")
+CLASS_COLORS = ("#3977af", "#999999", "#d65f4a")
+FINAL_TIMESTEP_INDEX = SEQUENCE_TIMESTEPS - 1
 TIMESTEP_COLUMNS = [
     column
     for index in range(SEQUENCE_TIMESTEPS)
@@ -95,12 +93,8 @@ OUTPUT_COLUMNS = [
     "avg_heat_input",
     "avg_pwr_gen",
     "avg_coal_nox",
-    "effective_previous_nox",
-    "effective_current_nox",
-    "effective_delta_nox",
-    AOI_SCALE_COL,
-    EMA_UPDATE_ALPHA_COL,
-    EMA_INNOVATION_COL,
+    AVG_NOX_START_COL,
+    AVG_NOX_END_COL,
     HYBRID_THRESHOLD_COL,
     DELTA_CATEGORY_COL,
     LABEL_MODE_COL,
@@ -123,7 +117,9 @@ REQUIRED_COLUMNS = [
     "facility_nameplate_capacity_mw",
 ]
 
-DEFAULT_DIAGNOSTIC_OUTPUT = Path(VIS_DIR) / "stratification_ema_balance.png"
+DEFAULT_DIAGNOSTIC_OUTPUT = Path(VIS_DIR) / "stratification_window_behavior.png"
+DEFAULT_MONTHLY_PREVALENCE_OUTPUT = Path(VIS_DIR) / "stratification_monthly_prevalence.png"
+DEFAULT_SOLAR_HOUR_PREVALENCE_OUTPUT = Path(VIS_DIR) / "stratification_solar_hour_prevalence.png"
 DEFAULT_AOI_CHARACTERISTICS_PLOT = Path(VIS_DIR) / "stratification_aoi_characteristics.png"
 DEFAULT_AOI_CHARACTERISTICS_OUTPUT = Path(VIS_DIR) / "stratification_aoi_characteristics.csv"
 DEFAULT_AOI_SELECTION_OUTPUT = Path(VIS_DIR) / "stratification_aoi_selection.csv"
@@ -142,6 +138,8 @@ def parse_args() -> argparse.Namespace:
     """Parse stratification command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--diagnostic-output", type=Path, default=DEFAULT_DIAGNOSTIC_OUTPUT)
+    parser.add_argument("--monthly-prevalence-output", type=Path, default=DEFAULT_MONTHLY_PREVALENCE_OUTPUT)
+    parser.add_argument("--solar-hour-prevalence-output", type=Path, default=DEFAULT_SOLAR_HOUR_PREVALENCE_OUTPUT)
     parser.add_argument(
         "--aoi-characteristics-plot",
         type=Path,
@@ -161,7 +159,7 @@ def _split_by_cluster(
     category_column: str | None = None,
 ) -> dict[str, pl.DataFrame]:
     # Greedily assign large clusters against record or class-specific targets
-    category_names = EMA_BUCKET_NAMES if category_column is not None else ()
+    category_names = CLASS_NAMES if category_column is not None else ()
     count_expressions = [pl.len().alias("records")]
     count_expressions.extend((pl.col(category_column) == category).sum().alias(category) for category in category_names)
     cluster_counts = (
@@ -236,46 +234,24 @@ def _split_by_cluster(
 
 
 def filter_stratification_rule(frame: pl.DataFrame) -> pl.DataFrame:
-    """Assign classes from an absolute and AOI-relative EMA innovation.
+    """Assign classes from the first-three and last-three time-weighted means.
 
     Args:
-        frame: Eligible records carrying timestep NOx values and raw effective deltas.
+        frame: Eligible records carrying time-weighted start and end NOx means.
 
     Returns:
-        Records carrying the AOI scale, innovation, threshold, and class.
+        Records carrying the hybrid threshold and class.
     """
-    timestep_columns = [f"t{index}_nox" for index in range(SEQUENCE_TIMESTEPS)]
-    scales = (
-        frame.select(AOI_ID_COL, pl.concat_list(timestep_columns).alias("_timestep_nox"))
-        .explode("_timestep_nox", empty_as_null=True)
-        .filter(pl.col("_timestep_nox").is_finite() & (pl.col("_timestep_nox") > 0))
-        .group_by(AOI_ID_COL)
-        .agg(pl.col("_timestep_nox").median().alias(AOI_SCALE_COL))
-        .filter(pl.col(AOI_SCALE_COL).is_finite() & (pl.col(AOI_SCALE_COL) > 0))
-    )
-    current_time = pl.col(f"t{LABEL_TIMESTEP_INDEX}_timestamp")
-    previous_time = pl.col(f"t{LABEL_TIMESTEP_INDEX - 1}_timestamp")
-    interval_hours = (current_time - previous_time).dt.total_seconds() / 3600
-    alpha = 1 - (-interval_hours / EMA_DECAY_TIMESCALE_HOURS).exp()
+    midpoint = (pl.col(AVG_NOX_START_COL) + pl.col(AVG_NOX_END_COL)) / 2
     threshold = pl.max_horizontal(
-        pl.lit(STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR),
-        STRATIFICATION_INNOVATION_RELATIVE_FLOOR * pl.col(AOI_SCALE_COL),
+        pl.lit(STRATIFICATION_WINDOW_ABSOLUTE_FLOOR),
+        STRATIFICATION_WINDOW_RELATIVE_FLOOR * midpoint,
     )
-    labeled = (
-        frame.join(scales, on=AOI_ID_COL, how="inner")
-        .with_columns(alpha.alias(EMA_UPDATE_ALPHA_COL))
-        .filter(pl.col(EMA_UPDATE_ALPHA_COL).is_finite() & (pl.col(EMA_UPDATE_ALPHA_COL) > 0))
-        .with_columns(
-            (pl.col("effective_delta_nox") / pl.col(EMA_UPDATE_ALPHA_COL)).alias(EMA_INNOVATION_COL),
-            threshold.alias(HYBRID_THRESHOLD_COL),
-        )
-        .filter(pl.col(EMA_INNOVATION_COL).is_finite())
-    )
-    innovation = pl.col(EMA_INNOVATION_COL)
-    return labeled.with_columns(
-        pl.when(innovation <= -pl.col(HYBRID_THRESHOLD_COL))
+    change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
+    return frame.with_columns(threshold.alias(HYBRID_THRESHOLD_COL)).with_columns(
+        pl.when(change <= -pl.col(HYBRID_THRESHOLD_COL))
         .then(pl.lit("decrease"))
-        .when(innovation >= pl.col(HYBRID_THRESHOLD_COL))
+        .when(change >= pl.col(HYBRID_THRESHOLD_COL))
         .then(pl.lit("increase"))
         .otherwise(pl.lit("steady"))
         .alias(DELTA_CATEGORY_COL)
@@ -286,7 +262,7 @@ def filter_aoi_class_floor(
     frame: pl.DataFrame,
     minimum_per_class: int = STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Retain AOIs with enough candidate records in every EMA class.
+    """Retain AOIs with enough candidate records in every target class.
 
     Args:
         frame: Labeled candidate records.
@@ -299,7 +275,7 @@ def filter_aoi_class_floor(
         frame,
         AOI_ID_COL,
         DELTA_CATEGORY_COL,
-        EMA_BUCKET_NAMES,
+        CLASS_NAMES,
         minimum_per_class,
     )
 
@@ -314,16 +290,16 @@ def _filter_metadata_eligibility(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def select_balanced_ema_records(
+def select_balanced_window_records(
     frame: pl.DataFrame,
     split: str,
     *,
     seed: int = SPLIT_SEED,
 ) -> pl.DataFrame:
-    """Select equal deterministic samples from three EMA-innovation buckets.
+    """Select equal deterministic samples from the three window-change classes.
 
     Args:
-        frame: Eligible records carrying the raw effective NOx delta.
+        frame: Eligible records carrying start and end NOx means.
         split: Split name used in progress and error messages.
         seed: Deterministic within-class ordering seed.
 
@@ -331,18 +307,20 @@ def select_balanced_ema_records(
         All three buckets downsampled to the smallest bucket count.
     """
     counts = frame.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
-    missing_classes = set(EMA_BUCKET_NAMES).difference(counts[DELTA_CATEGORY_COL].to_list())
+    missing_classes = set(CLASS_NAMES).difference(counts[DELTA_CATEGORY_COL].to_list())
     if missing_classes:
-        raise ValueError(f"[{split}] EMA buckets have no records: {', '.join(sorted(missing_classes))}")
+        raise ValueError(f"[{split}] target classes have no records: {', '.join(sorted(missing_classes))}")
     records_per_class = int(counts["len"].min())
     selected = []
-    identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{LABEL_TIMESTEP_INDEX}_timestamp")
-    for class_name in EMA_BUCKET_NAMES:
+    identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp")
+    for class_name in CLASS_NAMES:
         class_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
         if class_name == "steady":
-            weight = (
-                1 - pl.col(EMA_INNOVATION_COL).abs() / pl.col(HYBRID_THRESHOLD_COL)
-            ).clip(MIN_STEADY_SELECTION_WEIGHT, 1.0)
+            change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
+            weight = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(
+                MIN_STEADY_SELECTION_WEIGHT,
+                1.0,
+            )
             class_records = deterministic_weighted_sample(
                 class_records,
                 records_per_class,
@@ -352,9 +330,7 @@ def select_balanced_ema_records(
             )
         else:
             class_records = (
-                class_records.with_columns(
-                    pl.struct(*identity_columns).hash(seed=seed).alias("_selection_tie_breaker")
-                )
+                class_records.with_columns(pl.struct(*identity_columns).hash(seed=seed).alias("_selection_tie_breaker"))
                 .sort("_selection_tie_breaker", *identity_columns)
                 .head(records_per_class)
                 .drop("_selection_tie_breaker")
@@ -363,8 +339,8 @@ def select_balanced_ema_records(
     balanced = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
     count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
     print(
-        f"[{split}] threshold=max({STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR:g}, "
-        f"{STRATIFICATION_INNOVATION_RELATIVE_FLOOR:.0%} of AOI scale); eligible {count_summary}; "
+        f"[{split}] threshold=max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g}, "
+        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint); eligible {count_summary}; "
         f"selected {records_per_class:,} per class ({balanced.height:,} total)"
     )
     return balanced
@@ -375,80 +351,160 @@ def _plot_stratification_diagnostics(
     balanced_splits: dict[str, pl.DataFrame],
     output_path: Path,
 ) -> None:
-    # Compare EMA innovations and bucket composition before and after balancing
+    # Show class-specific emissions trajectories and split composition
     split_names = tuple(SPLIT_FRACTIONS)
     figure, axes = plt.subplots(2, 3, figsize=(16, 9), constrained_layout=True)
-    combined = np.concatenate([split[EMA_INNOVATION_COL].drop_nulls().to_numpy() for split in eligible_splits.values()])
-    finite = combined[np.isfinite(combined)]
-    lower, upper = np.quantile(finite, HISTOGRAM_QUANTILES)
-    limit = max(abs(lower), abs(upper))
-    if limit == 0:
-        limit = 1.0
-    threshold = STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR
-    total_eligible = sum(split.height for split in eligible_splits.values())
-    colors = ("#3977af", "#999999", "#d65f4a")
     for column_index, split_name in enumerate(split_names):
         eligible = eligible_splits[split_name]
         balanced = balanced_splits[split_name]
-        values = eligible[EMA_INNOVATION_COL].drop_nulls().to_numpy()
-        values = values[np.isfinite(values)]
-        visible = values[np.abs(values) <= limit]
-        aoi_count = eligible[AOI_ID_COL].n_unique()
-
-        histogram_axis = axes[0, column_index]
-        histogram_axis.hist(visible, bins=70, range=(-limit, limit), color="#4c78a8", edgecolor="white")
-        histogram_axis.axvline(0, color="black", linewidth=1)
-        histogram_axis.axvline(-threshold, color="#b22222", linestyle="--", linewidth=1.5)
-        histogram_axis.axvline(threshold, color="#b22222", linestyle="--", linewidth=1.5)
-        histogram_axis.set_title(
-            f"{split_name}: {eligible.height:,} eligible ({eligible.height / total_eligible:.1%}), {aoi_count} AOIs"
+        trajectory_axis = axes[0, column_index]
+        for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
+            class_frame = balanced.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
+            values = np.column_stack(
+                [class_frame[f"t{index}_nox"].to_numpy() for index in range(SEQUENCE_TIMESTEPS)]
+            )
+            median = np.median(values, axis=0)
+            lower, upper = np.quantile(values, (0.25, 0.75), axis=0)
+            positions = np.arange(SEQUENCE_TIMESTEPS)
+            trajectory_axis.plot(positions, median, marker="o", color=color, label=class_name.title())
+            trajectory_axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
+        trajectory_axis.set(
+            title=f"{split_name.title()}: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs",
+            xlabel="TEMPO timestep",
+            ylabel="Interpolated NOx (lb/hr)",
+            xticks=range(SEQUENCE_TIMESTEPS),
+            xticklabels=[f"t{index}" for index in range(SEQUENCE_TIMESTEPS)],
         )
-        histogram_axis.set_xlabel("EMA innovation (lb/hr)")
-        histogram_axis.set_ylabel("AOI-hour count")
-        histogram_axis.grid(axis="y", alpha=0.2)
+        trajectory_axis.grid(alpha=0.2)
+        if column_index == 0:
+            trajectory_axis.legend()
 
         category_counts = dict(eligible.group_by(DELTA_CATEGORY_COL).len().iter_rows())
-        eligible_counts = np.array([category_counts.get(category, 0) for category in EMA_BUCKET_NAMES])
-        balanced_count = balanced.height // len(EMA_BUCKET_NAMES)
-        balanced_counts = np.full(len(EMA_BUCKET_NAMES), balanced_count)
-        positions = np.arange(len(EMA_BUCKET_NAMES))
+        eligible_counts = np.array([category_counts.get(category, 0) for category in CLASS_NAMES])
+        balanced_count = balanced.height // len(CLASS_NAMES)
+        balanced_counts = np.full(len(CLASS_NAMES), balanced_count)
+        positions = np.arange(len(CLASS_NAMES))
         width = 0.38
         bucket_axis = axes[1, column_index]
         before_bars = bucket_axis.bar(
             positions - width / 2,
-            100 * eligible_counts / eligible_counts.sum(),
+            eligible_counts,
             width,
             label="Eligible",
-            color=colors,
+            color=CLASS_COLORS,
             alpha=0.55,
         )
         after_bars = bucket_axis.bar(
             positions + width / 2,
-            100 * balanced_counts / balanced_counts.sum(),
+            balanced_counts,
             width,
             label="Balanced",
-            color=colors,
+            color=CLASS_COLORS,
         )
-        bucket_axis.set_xticks(positions, EMA_BUCKET_NAMES)
-        bucket_axis.set_ylim(0, 105)
-        bucket_axis.set_ylabel("Share of records (%)")
+        bucket_axis.set_xticks(positions, CLASS_NAMES)
+        bucket_axis.set_ylabel("Records")
         bucket_axis.grid(axis="y", alpha=0.2)
-        bucket_axis.set_title(f"Maximum balanced set: {balanced.height:,} ({balanced_count:,} per bucket)")
+        bucket_axis.set_title(
+            f"Eligible: {eligible.height:,} records, {eligible[AOI_ID_COL].n_unique():,} AOIs\n"
+            f"Balanced: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs"
+        )
         bucket_axis.bar_label(before_bars, labels=[f"{count:,}" for count in eligible_counts], fontsize=8)
         bucket_axis.bar_label(after_bars, labels=[f"{count:,}" for count in balanced_counts], fontsize=8)
         if column_index == 0:
             bucket_axis.legend(loc="upper left")
-    split_counts = ", ".join(f"{name}={balanced_splits[name].height:,}" for name in split_names)
-    total_balanced = sum(split.height for split in balanced_splits.values())
     figure.suptitle(
-        "Hybrid EMA innovation threshold: "
-        f"max({STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR:g} lb/hr, "
-        f"{STRATIFICATION_INNOVATION_RELATIVE_FLOOR:.0%} of AOI scale)\n"
-        f"Maximum balanced set: {total_balanced:,} total ({split_counts})"
+        "Five-timestep emissions behavior by final class\n"
+        f"Threshold: max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
+        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint); lines show median and IQR"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=180)
     plt.close(figure)
+
+
+def _class_prevalence(frame: pl.DataFrame, group: pl.Expr, groups: list[int]) -> np.ndarray:
+    # Calculate within-group class shares in a fixed group order
+    counts = frame.with_columns(group.alias("_group")).group_by("_group", DELTA_CATEGORY_COL).len()
+    lookup = {(int(row["_group"]), row[DELTA_CATEGORY_COL]): int(row["len"]) for row in counts.iter_rows(named=True)}
+    values = np.array([[lookup.get((group_value, name), 0) for name in CLASS_NAMES] for group_value in groups])
+    totals = values.sum(axis=1, keepdims=True)
+    return np.divide(values, totals, out=np.zeros_like(values, dtype=np.float64), where=totals > 0)
+
+
+def _plot_class_prevalence(
+    splits: dict[str, pl.DataFrame],
+    group: pl.Expr,
+    groups: list[int],
+    tick_labels: list[str],
+    xlabel: str,
+    title: str,
+    output_path: Path,
+) -> None:
+    # Plot within-bin class prevalence for each final split
+    figure, axes = plt.subplots(1, len(SPLIT_FRACTIONS), figsize=(17, 5), sharey=True, constrained_layout=True)
+    positions = np.arange(len(groups))
+    for axis, (split_name, frame) in zip(axes, splits.items(), strict=True):
+        prevalence = _class_prevalence(frame, group, groups)
+        bottom = np.zeros(len(groups), dtype=np.float64)
+        for class_index, (class_name, color) in enumerate(zip(CLASS_NAMES, CLASS_COLORS, strict=True)):
+            values = 100 * prevalence[:, class_index]
+            axis.bar(positions, values, bottom=bottom, color=color, label=class_name.title())
+            bottom += values
+        axis.set(
+            title=f"{split_name.title()}: {frame.height:,} records, {frame[AOI_ID_COL].n_unique():,} AOIs",
+            xlabel=xlabel,
+            xticks=positions,
+            xticklabels=tick_labels,
+            ylim=(0, 100),
+        )
+        axis.tick_params(axis="x", rotation=45)
+        axis.grid(axis="y", alpha=0.2)
+    axes[0].set_ylabel("Class prevalence (%)")
+    axes[-1].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+    figure.suptitle(title)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _plot_monthly_class_prevalence(splits: dict[str, pl.DataFrame], output_path: Path) -> None:
+    # Compare final class prevalence across calendar months
+    groups = list(range(1, 13))
+    labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    timestamp = pl.col(f"t{FINAL_TIMESTEP_INDEX}_timestamp")
+    _plot_class_prevalence(
+        splits,
+        timestamp.dt.month(),
+        groups,
+        labels,
+        "Month",
+        "Monthly class prevalence after balancing",
+        output_path,
+    )
+
+
+def _plot_solar_hour_class_prevalence(splits: dict[str, pl.DataFrame], output_path: Path) -> None:
+    # Compare final class prevalence by local solar hour of the final scan
+    timestamp = pl.col(f"t{FINAL_TIMESTEP_INDEX}_timestamp")
+    solar_hour = (
+        timestamp.dt.hour() + timestamp.dt.minute() / 60 + timestamp.dt.second() / 3_600 + pl.col("lon") / 15
+    ) % 24
+    groups = sorted(
+        {
+            int(value)
+            for frame in splits.values()
+            for value in frame.select(solar_hour.floor().cast(pl.Int8).alias("_solar_hour"))["_solar_hour"].to_list()
+        }
+    )
+    _plot_class_prevalence(
+        splits,
+        solar_hour.floor().cast(pl.Int8),
+        groups,
+        [str(hour) for hour in groups],
+        "Local solar hour",
+        "Local-solar-hour class prevalence after balancing",
+        output_path,
+    )
 
 
 def _rank_aoi_scores(all_aois: pl.DataFrame, scores: pl.DataFrame) -> pl.DataFrame:
@@ -652,12 +708,9 @@ def build_stratification_candidates(
     all_spatial_aois = build_aoi_spatial_frame(all_aois)
     all_membership = build_aoi_membership(all_aois, facilities, all_spatial_aois)
     characteristics = calculate_aoi_characteristics(raw_records, all_membership, all_aois)
-    nox_scores = (
-        characteristics.filter(
-            pl.col("active_median_total_nox").is_finite() & (pl.col("active_median_total_nox") >= 0)
-        )
-        .select(AOI_ID_COL, pl.col("active_median_total_nox").alias(AOI_SCORE_COL))
-    )
+    nox_scores = characteristics.filter(
+        pl.col("active_median_total_nox").is_finite() & (pl.col("active_median_total_nox") >= 0)
+    ).select(AOI_ID_COL, pl.col("active_median_total_nox").alias(AOI_SCORE_COL))
     ranked_scores = _rank_aoi_scores(all_aois, nox_scores)
     selected_scores = select_top_scored_aois(ranked_scores, STRATIFICATION_AOI_FRACTION)
     selected_ids = selected_scores.select(AOI_ID_COL)
@@ -721,27 +774,19 @@ def build_stratification_candidates(
         .drop("_has_invalid_nox")
     )
     frame = hourly.join(cluster_aois(aois, spatial_aois), on=AOI_ID_COL, how="left")
-    frame = add_tempo_sequences(
-        frame,
-        observations,
-        SEQUENCE_TIMESTEPS,
-        label_timestep_index=LABEL_TIMESTEP_INDEX,
-    )
+    frame = add_tempo_sequences(frame, observations, SEQUENCE_TIMESTEPS)
     frame = frame.filter(pl.col(f"timestep_time_t{SEQUENCE_TIMESTEPS - 1}").is_not_null())
     frame = add_timestep_nox(frame, hourly, SEQUENCE_TIMESTEPS)
-    frame = add_ema_targets(
-        frame,
-        EMA_HISTORY_TIMESTEPS,
-        EMA_DECAY_TIMESCALE_HOURS,
-        label_timestep_index=LABEL_TIMESTEP_INDEX,
-    )
-    frame = frame.with_columns(pl.lit("linear_interpolated_timestep_ema").alias(LABEL_MODE_COL))
+    frame = add_window_average_targets(frame)
+    frame = frame.with_columns(pl.lit("time_weighted_first_last_three").alias(LABEL_MODE_COL))
     bounds = bounded_aois.select(AOI_ID_COL, "lat_min", "lat_max", "lon_min", "lon_max", MAJOR_CITY_DIST_COL)
     frame = add_sequence_weather_paths(
         frame.join(bounds, on=AOI_ID_COL, how="left"),
         SEQUENCE_TIMESTEPS,
     )
-    frame = _filter_metadata_eligibility(frame).filter(pl.col("effective_delta_nox").is_finite())
+    frame = _filter_metadata_eligibility(frame).filter(
+        pl.col(AVG_NOX_START_COL).is_finite() & pl.col(AVG_NOX_END_COL).is_finite()
+    )
     return frame.rename({f"timestep_time_t{index}": f"t{index}_timestamp" for index in range(SEQUENCE_TIMESTEPS)})
 
 
@@ -755,9 +800,9 @@ def main() -> None:
     )
     frame = filter_stratification_rule(candidates)
     print(
-        f"Labeled {frame.height:,} records with hybrid EMA innovation threshold "
-        f"max({STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR:g} lb/hr, "
-        f"{STRATIFICATION_INNOVATION_RELATIVE_FLOOR:.0%} of AOI scale)"
+        f"Labeled {frame.height:,} records with time-weighted window threshold "
+        f"max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
+        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint)"
     )
     frame, class_audit = filter_aoi_class_floor(frame)
     eligible_aoi_count = class_audit.filter(pl.col("meets_class_floor")).height
@@ -766,9 +811,15 @@ def main() -> None:
         f"{STRATIFICATION_MINIMUM_RECORDS_PER_CLASS} records in every class"
     )
     eligible_splits = _split_by_cluster(frame, category_column=DELTA_CATEGORY_COL)
-    splits = {split: select_balanced_ema_records(split_frame, split) for split, split_frame in eligible_splits.items()}
+    splits = {
+        split: select_balanced_window_records(split_frame, split) for split, split_frame in eligible_splits.items()
+    }
     _plot_stratification_diagnostics(eligible_splits, splits, args.diagnostic_output)
-    print(f"Saved EMA-balance diagnostics to {args.diagnostic_output}")
+    _plot_monthly_class_prevalence(splits, args.monthly_prevalence_output)
+    _plot_solar_hour_class_prevalence(splits, args.solar_hour_prevalence_output)
+    print(f"Saved window-behavior diagnostics to {args.diagnostic_output}")
+    print(f"Saved monthly class prevalence to {args.monthly_prevalence_output}")
+    print(f"Saved solar-hour class prevalence to {args.solar_hour_prevalence_output}")
     os.makedirs(STRAT_BASE_DIR, exist_ok=True)
     del frame
     # Project and write one split at a time so the copies never coexist

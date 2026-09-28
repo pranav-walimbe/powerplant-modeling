@@ -51,8 +51,8 @@ IMG_RANGE = 72  # spatial extent of extracted image patch (km)
 TARGET_LABEL_MODE = "overlap_weighted"  # interpolate CAMPD hours over each TEMPO interval
 MIN_CITY_POPULATION = 500000  # metro population a populated place needs to count as a major city
 STRAT_BASE_DIR = "/global/scratch/projects/fc_nitrates/ddp/nox/nox_powerplant_data"  # stratified split output directory
-STRATIFICATION_INNOVATION_ABSOLUTE_FLOOR = 200.0  # minimum EMA-innovation magnitude for a change label
-STRATIFICATION_INNOVATION_RELATIVE_FLOOR = 0.25  # minimum change as a share of typical positive AOI NOx
+STRATIFICATION_WINDOW_ABSOLUTE_FLOOR = 200.0  # minimum early-to-late mean change for a change label
+STRATIFICATION_WINDOW_RELATIVE_FLOOR = 0.20  # minimum change as a share of the early-late midpoint
 STRATIFICATION_MINIMUM_RECORDS_PER_CLASS = 20  # per-AOI candidate floor before geographic splitting
 STRATIFICATION_AOI_FRACTION = 0.50  # highest active-median-NOx share of mapped AOIs
 TRAIN_RECORDS_CSV = os.path.join(STRAT_BASE_DIR, "train_records.csv")  # train split metadata
@@ -105,10 +105,7 @@ PRETRAINED_MASKED_MODEL_WEIGHTS = os.getenv(  # masked-model checkpoint for gap 
     "PRETRAINED_MASKED_MODEL_WEIGHTS",
     "/global/home/users/pranavwalimbe/masked_model_runs/a40/masked_no2_20260924_183700/checkpoints/best_masked_no2.pt",
 )
-SEQUENCE_TIMESTEPS = 4  # four causal rasters ending at the label timestamp
-LABEL_TIMESTEP_INDEX = 3  # zero-based final raster timestep consumed by the label EMA
-EMA_HISTORY_TIMESTEPS = 4  # interpolated timestep values consumed by the label EMA
-EMA_DECAY_TIMESCALE_HOURS = 2.0  # exponential e-folding time kept separate from the sequence length
+SEQUENCE_TIMESTEPS = 5  # five causal rasters spanning the early and late label windows
 MODEL_IMAGE_KEYS = ("no2", "temperature_2m_k", "wind_u_80m_mps", "wind_v_80m_mps")
 MODEL_MASK_KEYS = ("no2_mask",)
 MODEL_ROBUST_IMAGE_KEYS = ("no2",)

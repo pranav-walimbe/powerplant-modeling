@@ -63,9 +63,10 @@ sbatch scripts/slurm/stratify_plants.sh
 
 The observation launcher runs 32 tasks. Stratification ranks facility-centered
 AOIs by activity-conditioned median NOx, retains the highest-scoring half,
-builds causal EMA targets, requires 20 records in every class per AOI, assigns
-overlapping AOIs to the same geographic split, and balances the three classes
-within each split. See [dataset_design.md](dataset_design.md).
+builds five-timestep time-weighted window targets, requires 20 records in every
+class per AOI, assigns overlapping AOIs to the same geographic split, and
+balances the three classes within each split. See
+[dataset_design.md](dataset_design.md).
 
 ## 3. Generate raster records
 
@@ -96,8 +97,9 @@ their current batch. Pass `--refresh-tempo`, `--refresh-weather`, or
 changes. Do not regenerate while a model job reads the dataset.
 
 Workers require at least 90% finite NO2 coverage at each timestep. The
-finalizer publishes split CSVs only after it validates all shard outcomes. See
-[regridding.md](regridding.md).
+finalizer publishes split CSVs only after it validates all shard outcomes. It
+also emails a plot of the post-filter emissions trajectories by class and
+split. See [regridding.md](regridding.md).
 
 ## 4. Compute AOI-specific NO2 normalization
 
