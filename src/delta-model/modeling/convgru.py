@@ -1,7 +1,7 @@
 """Convolutional recurrent network for emissions-change classification."""
 
 import torch
-from modeling.mlp import SeasonalMLP
+from modeling.mlp import SEASONAL_EMBEDDING_DIM, SeasonalMLP
 from torch import nn
 from torch.nn import functional as F
 
@@ -183,32 +183,26 @@ class RasterConvGRUClassifier(nn.Module):
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
 
 
-class VisionSeasonalFusionClassifier(RasterConvGRUClassifier):
-    """Add vision evidence to a frozen seasonal classifier's logits."""
+class LearnedEmbeddingFusionClassifier(RasterConvGRUClassifier):
+    """Jointly classify learned raster and seasonal embeddings."""
 
     def __init__(
         self,
         n_features: int,
-        seasonal_state_dict: dict[str, torch.Tensor],
         *,
         model_width: int = DEFAULT_MODEL_WIDTH,
         head_dim: int = DEFAULT_HEAD_DIM,
         dropout: float = DEFAULT_DROPOUT,
     ) -> None:
         super().__init__(model_width=model_width, head_dim=head_dim, dropout=dropout)
-        self.seasonal_model = SeasonalMLP(n_features)
-        self.seasonal_model.load_state_dict(seasonal_state_dict)
-        self.seasonal_model.requires_grad_(False)
-        self.seasonal_model.eval()
-        final_layer = self.classifier[-1]
-        nn.init.zeros_(final_layer.weight)
-        nn.init.zeros_(final_layer.bias)
-
-    def train(self, mode: bool = True) -> "VisionSeasonalFusionClassifier":
-        """Set training mode while keeping the frozen seasonal branch in evaluation mode."""
-        super().train(mode)
-        self.seasonal_model.eval()
-        return self
+        self.seasonal_encoder = SeasonalMLP(n_features).encoder
+        self.classifier = nn.Sequential(
+            nn.Linear(model_width + SEASONAL_EMBEDDING_DIM, head_dim),
+            nn.LayerNorm(head_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(head_dim, len(MODEL_CLASS_NAMES)),
+        )
 
     def forward(
         self,
@@ -216,7 +210,7 @@ class VisionSeasonalFusionClassifier(RasterConvGRUClassifier):
         seasonal: torch.Tensor,
         elapsed_hours: torch.Tensor,
     ) -> torch.Tensor:
-        vision_logits = super().forward(image, seasonal, elapsed_hours)
-        with torch.no_grad():
-            seasonal_logits = self.seasonal_model(image, seasonal, elapsed_hours)
-        return vision_logits + seasonal_logits
+        del elapsed_hours
+        vision_embedding = self._encode_sequence(image)
+        seasonal_embedding = self.seasonal_encoder(seasonal)
+        return self.classifier(torch.cat((vision_embedding, seasonal_embedding), dim=1))

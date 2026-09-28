@@ -1,4 +1,4 @@
-"""Plotting utilities for seasonal and vision-seasonal classification."""
+"""Plotting utilities for seasonal and learned-fusion classification."""
 
 import calendar
 from pathlib import Path
@@ -9,19 +9,19 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.container import BarContainer
-
-from config import MODEL_CLASS_NAMES
 from modeling.dataset import FINAL_TIMESTEP_TIME_COLUMN
 from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classification_metrics
 
-MODEL_ORDER = ("seasonal", "vision_seasonal")
+from config import MODEL_CLASS_NAMES
+
+MODEL_ORDER = ("seasonal", "learned_fusion")
 MODEL_DISPLAY_NAMES = {
     "seasonal": "Seasonal",
-    "vision_seasonal": "Vision + seasonal",
+    "learned_fusion": "Learned fusion",
 }
 MODEL_COLORS = {
     "seasonal": "#4C78A8",
-    "vision_seasonal": "#F58518",
+    "learned_fusion": "#F58518",
 }
 SPLIT_ORDER = ("train", "val", "test")
 STRATUM_ORDER = ("Low", "Middle", "High")
@@ -113,7 +113,7 @@ def plot_split_class_accuracy(
             xticklabels=[name.title() for name in MODEL_CLASS_NAMES],
             ylim=(0, 1.08),
         )
-    figure.suptitle("Seasonal and vision-seasonal accuracy", fontsize=16)
+    figure.suptitle("Seasonal and learned-fusion accuracy", fontsize=16)
     figure.tight_layout()
     _save(figure, run_dir, "split_class_accuracy")
 
@@ -165,7 +165,7 @@ def _tertiles(values: pd.Series) -> pd.Series:
 
 def _stratum_result(
     seasonal: pd.DataFrame,
-    vision: pd.DataFrame,
+    fusion: pd.DataFrame,
     *,
     characteristic: str,
     characteristic_label: str,
@@ -177,7 +177,7 @@ def _stratum_result(
 ) -> dict[str, object]:
     # Summarize one model comparison group
     seasonal_accuracy = _accuracy(seasonal.loc[mask])
-    vision_accuracy = _accuracy(vision.loc[mask])
+    fusion_accuracy = _accuracy(fusion.loc[mask])
     return {
         "characteristic": characteristic,
         "characteristic_label": characteristic_label,
@@ -189,8 +189,8 @@ def _stratum_result(
         "value_min": float(values.min()),
         "value_max": float(values.max()),
         "seasonal_accuracy": seasonal_accuracy,
-        "vision_seasonal_accuracy": vision_accuracy,
-        "vision_accuracy_gain": vision_accuracy - seasonal_accuracy,
+        "learned_fusion_accuracy": fusion_accuracy,
+        "fusion_accuracy_gain": fusion_accuracy - seasonal_accuracy,
     }
 
 
@@ -200,15 +200,15 @@ def _aligned_frames(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Return row-aligned predictions for one split
     seasonal = model_frames["seasonal"][split].reset_index(drop=True)
-    vision = model_frames["vision_seasonal"][split].reset_index(drop=True)
-    if not seasonal[["aoi_id", TRUE_CLASS_COL]].equals(vision[["aoi_id", TRUE_CLASS_COL]]):
-        raise ValueError(f"Seasonal and vision {split} predictions are not row-aligned")
-    return seasonal, vision
+    fusion = model_frames["learned_fusion"][split].reset_index(drop=True)
+    if not seasonal[["aoi_id", TRUE_CLASS_COL]].equals(fusion[["aoi_id", TRUE_CLASS_COL]]):
+        raise ValueError(f"Seasonal and learned-fusion {split} predictions are not row-aligned")
+    return seasonal, fusion
 
 
 def _characteristic_accuracy_table(model_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
     # Compare model accuracy across AOI tertiles and calendar months
-    seasonal, vision = _aligned_frames(model_frames, "test")
+    seasonal, fusion = _aligned_frames(model_frames, "test")
 
     aoi_values = seasonal.groupby("aoi_id", sort=True)[list(AOI_STRATA)].median(numeric_only=True)
     rows: list[dict[str, object]] = []
@@ -222,7 +222,7 @@ def _characteristic_accuracy_table(model_frames: dict[str, dict[str, pd.DataFram
             rows.append(
                 _stratum_result(
                     seasonal,
-                    vision,
+                    fusion,
                     characteristic=column,
                     characteristic_label=display_name,
                     split="test",
@@ -234,7 +234,7 @@ def _characteristic_accuracy_table(model_frames: dict[str, dict[str, pd.DataFram
             )
 
     for split in ("test", "val"):
-        seasonal, vision = _aligned_frames(model_frames, split)
+        seasonal, fusion = _aligned_frames(model_frames, split)
         months = pd.to_datetime(seasonal[FINAL_TIMESTEP_TIME_COLUMN], utc=True).dt.month
         for month in sorted(months.unique()):
             mask = months == month
@@ -242,7 +242,7 @@ def _characteristic_accuracy_table(model_frames: dict[str, dict[str, pd.DataFram
             rows.append(
                 _stratum_result(
                     seasonal,
-                    vision,
+                    fusion,
                     characteristic=MONTH_CHARACTERISTIC,
                     characteristic_label=f"Month ({split})",
                     split=split,
@@ -280,7 +280,7 @@ def plot_accuracy_by_characteristic(
             subset = subset.sort_values("value_min")
         positions = np.arange(len(subset), dtype=np.float64)
         seasonal_scores = subset["seasonal_accuracy"].to_numpy(dtype=np.float64)
-        vision_scores = subset["vision_seasonal_accuracy"].to_numpy(dtype=np.float64)
+        fusion_scores = subset["learned_fusion_accuracy"].to_numpy(dtype=np.float64)
         axis.plot(
             positions,
             seasonal_scores,
@@ -291,25 +291,25 @@ def plot_accuracy_by_characteristic(
         )
         axis.plot(
             positions,
-            vision_scores,
+            fusion_scores,
             marker="o",
             linewidth=2,
-            color=MODEL_COLORS["vision_seasonal"],
-            label=MODEL_DISPLAY_NAMES["vision_seasonal"],
+            color=MODEL_COLORS["learned_fusion"],
+            label=MODEL_DISPLAY_NAMES["learned_fusion"],
         )
-        for position, seasonal_score, vision_score in zip(
+        for position, seasonal_score, fusion_score in zip(
             positions,
             seasonal_scores,
-            vision_scores,
+            fusion_scores,
             strict=True,
         ):
-            if not np.isfinite(seasonal_score) or not np.isfinite(vision_score):
+            if not np.isfinite(seasonal_score) or not np.isfinite(fusion_score):
                 continue
-            gain = vision_score - seasonal_score
+            gain = fusion_score - seasonal_score
             color = "#2E7D32" if gain >= 0 else "#B71C1C"
             axis.annotate(
                 f"{gain:+.3f}",
-                (position, max(seasonal_score, vision_score)),
+                (position, max(seasonal_score, fusion_score)),
                 xytext=(0, 8),
                 textcoords="offset points",
                 ha="center",
@@ -336,7 +336,7 @@ def plot_accuracy_by_characteristic(
     flat_axes[0].legend(loc="lower right")
     figure.suptitle(
         "Model accuracy by AOI characteristic and calendar month\n"
-        "Labels show vision accuracy minus seasonal accuracy",
+        "Labels show learned-fusion accuracy minus seasonal accuracy",
         fontsize=16,
     )
     figure.tight_layout()

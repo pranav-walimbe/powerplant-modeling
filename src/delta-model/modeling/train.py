@@ -1,4 +1,4 @@
-"""Train seasonal and vision-seasonal emissions-change classifiers."""
+"""Train seasonal and learned-fusion emissions-change classifiers."""
 
 import argparse
 import hashlib
@@ -16,9 +16,9 @@ from modeling.convgru import (
     DEFAULT_MODEL_WIDTH,
     ENCODER_ARCHITECTURE_NAME,
     ENCODER_OUTPUT_CHANNELS,
+    LearnedEmbeddingFusionClassifier,
     RasterFrameEncoder,
     ResidualBlock,
-    VisionSeasonalFusionClassifier,
 )
 from modeling.dataset import (
     MODEL_FEATURE_NAMES,
@@ -49,6 +49,7 @@ from config import (
     NUM_CORES,
     PRETRAINED_MASKED_MODEL_WEIGHTS,
     RUNS_DIR,
+    SEQUENCE_TIMESTEPS,
 )
 
 DEFAULT_BATCH_SIZE = 128
@@ -485,7 +486,7 @@ def _class_counts(dataset: NOxDataset) -> dict[str, int]:
 
 
 def main() -> None:
-    """Train and evaluate seasonal and vision-seasonal classifiers."""
+    """Train and evaluate seasonal and learned-fusion classifiers."""
     args = parse_args()
     _seed_everything(args.seed)
     device = _device(args.device)
@@ -500,7 +501,7 @@ def main() -> None:
     run_dir = Path(RUNS_DIR) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    print(f"Training seasonal and vision-seasonal classifiers on {device}; outputs: {run_dir}")
+    print(f"Training seasonal and learned-fusion classifiers on {device}; outputs: {run_dir}")
 
     masked_model_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
     stats = compute_stats("train", fixed_image_stats=masked_model_checkpoint["normalization_stats"])
@@ -538,6 +539,7 @@ def main() -> None:
         "seasonal_feature_names": MODEL_FEATURE_NAMES,
         "target_name": MODEL_TARGET_COL,
         "class_names": MODEL_CLASS_NAMES,
+        "sequence_timesteps": SEQUENCE_TIMESTEPS,
         "pretrained_masked_model_sha256": masked_checkpoint_sha256,
     }
     histories: dict[str, tuple[list[float], list[float]]] = {}
@@ -570,64 +572,64 @@ def main() -> None:
     }
     histories["seasonal"] = (seasonal_train_losses, seasonal_val_losses)
     model_frames["seasonal"] = seasonal_frames
-    seasonal_state_dict = {
-        name: parameter.detach().cpu().clone() for name, parameter in seasonal_model.state_dict().items()
-    }
     del seasonal_model, seasonal_train_loader, seasonal_eval_loaders, seasonal_datasets
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
     _seed_everything(args.seed)
-    vision_model = VisionSeasonalFusionClassifier(
+    fusion_model = LearnedEmbeddingFusionClassifier(
         len(MODEL_FEATURE_NAMES),
-        seasonal_state_dict,
         model_width=args.model_width,
         head_dim=args.head_dim,
         dropout=args.dropout,
     ).to(device)
     train_loader = _loader(datasets["train"], shuffle=True, args=args, device=device)
-    print(f"Training {vision_model.num_params():,}-parameter vision-seasonal classifier")
-    vision_train_losses, vision_val_losses, vision_best_loss = fit_model(
-        vision_model,
+    print(f"Training {fusion_model.num_params():,}-parameter learned-fusion classifier")
+    fusion_train_losses, fusion_val_losses, fusion_best_loss = fit_model(
+        fusion_model,
         train_loader,
         eval_loaders["val"],
         device=device,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         args=args,
-        checkpoint_path=checkpoint_dir / "best_vision_seasonal_classifier.pt",
+        checkpoint_path=checkpoint_dir / "best_learned_fusion_classifier.pt",
         checkpoint_metadata={
             **common_checkpoint_metadata,
             "encoder_architecture": ENCODER_ARCHITECTURE_NAME,
             "model_width": args.model_width,
             "encoder_initialization": "random",
-            "fusion": "frozen_seasonal_plus_vision_logits",
+            "fusion": "joint_raster_and_seasonal_embedding_concatenation",
+            "seasonal_encoder_training": "joint_end_to_end",
+            "loss": "unweighted_hard_cross_entropy",
         },
-        phase_name="Vision-seasonal classifier",
+        phase_name="Learned-fusion classifier",
     )
-    vision_frames = {}
+    fusion_frames = {}
     for split, loader in eval_loaders.items():
-        logits, probabilities, indices = run_inference(vision_model, loader, device)
-        vision_frames[split] = _prediction_frame(datasets[split], logits, probabilities, indices)
-    histories["vision_seasonal"] = (vision_train_losses, vision_val_losses)
-    model_frames["vision_seasonal"] = vision_frames
-    training_summaries["vision_seasonal"] = {
+        logits, probabilities, indices = run_inference(fusion_model, loader, device)
+        fusion_frames[split] = _prediction_frame(datasets[split], logits, probabilities, indices)
+    histories["learned_fusion"] = (fusion_train_losses, fusion_val_losses)
+    model_frames["learned_fusion"] = fusion_frames
+    training_summaries["learned_fusion"] = {
         "maximum_epochs": args.epochs,
         "learning_rate": args.learning_rate,
-        "parameters": vision_model.num_params(),
+        "parameters": fusion_model.num_params(),
         "model_width": args.model_width,
-        "best_validation_loss": vision_best_loss,
+        "best_validation_loss": fusion_best_loss,
         "encoder_initialization": "random",
-        "seasonal_model_frozen": True,
-        "fusion": "frozen_seasonal_plus_vision_logits",
+        "seasonal_encoder_training": "joint_end_to_end",
+        "fusion": "joint_raster_and_seasonal_embedding_concatenation",
+        "loss": "unweighted_hard_cross_entropy",
     }
-    del vision_model, train_loader
+    del fusion_model, train_loader
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
     run_config = {
         "device": str(device),
-        "models": ["seasonal", "vision_seasonal"],
+        "models": ["seasonal", "learned_fusion"],
+        "loss": "unweighted_hard_cross_entropy",
         "batch_size": args.batch_size,
         "workers": args.workers,
         "training": training_summaries,
@@ -662,11 +664,13 @@ def main() -> None:
         "image_clip_range": [-MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS],
         "target_name": MODEL_TARGET_COL,
         "class_names": list(MODEL_CLASS_NAMES),
+        "sequence_timesteps": SEQUENCE_TIMESTEPS,
         "class_counts": {split: _class_counts(dataset) for split, dataset in datasets.items()},
         "seasonal_features": list(MODEL_FEATURE_NAMES),
         "prediction_family": "three_class_categorical_distribution",
         "sequence_encoder": "completed_raster_frame_encoder_then_convgru",
-        "fusion": "frozen_seasonal_plus_vision_logits",
+        "fusion": "joint_raster_and_seasonal_embedding_concatenation",
+        "seasonal_encoder_training": "joint_end_to_end",
     }
     with (run_dir / "run_config.json").open("w") as destination:
         json.dump(run_config, destination, indent=2)
@@ -674,7 +678,7 @@ def main() -> None:
     plot_split_class_accuracy(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
-    save_results(model_frames, run_dir, primary_model_name="vision_seasonal")
+    save_results(model_frames, run_dir, primary_model_name="learned_fusion")
 
 
 if __name__ == "__main__":

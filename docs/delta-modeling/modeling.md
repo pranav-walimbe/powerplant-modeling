@@ -1,6 +1,6 @@
 # Modeling
 
-The delta-model trainer compares a seasonal classifier with a vision-seasonal
+The delta-model trainer compares a seasonal classifier with a learned-fusion
 classifier on the same geographic splits. The masked NO2 model fills missing
 raster pixels before classifier training. Its encoder does not initialize the
 vision model.
@@ -11,13 +11,13 @@ vision model.
 |---|---|
 | Target | Stored `delta_category` |
 | Classes | `decrease`, `steady`, `increase`, mapped to 0, 1, and 2 |
-| Raster sequence | Four completed `4 x 24 x 24` frames |
+| Raster sequence | Five completed frames with shape `5 x 4 x 24 x 24` |
 | Raster channels | NO2, 2 m temperature, eastward wind, northward wind |
 | Seasonal input | Local-solar-hour sine/cosine and day-of-year sine/cosine |
 | Loss | Unweighted three-class cross-entropy |
 | Prediction | Softmax distribution over the three classes |
 | Checkpoint selection | Lowest validation cross-entropy for each model |
-| Primary result | Vision-seasonal late-fusion classifier |
+| Primary result | Jointly trained raster-seasonal embedding fusion classifier |
 
 Dataset generation supplies the class label. The loader consumes that label
 without recreating its construction.
@@ -76,42 +76,38 @@ The 291-parameter seasonal MLP maps four inputs through 16-value and 8-value
 hidden representations before producing three logits. Training selects its
 lowest-validation-loss checkpoint.
 
-### Vision-seasonal classifier
+### Learned-fusion classifier
 
-The trainer copies the selected seasonal MLP into the combined model and freezes
-all of its parameters. A frame encoder maps each completed raster to a
+The trainer learns a separate seasonal encoder jointly with the raster branch.
+A frame encoder maps each completed raster to a
 `48 x 6 x 6` feature map. A 48-channel ConvGRU processes the five maps in time
 order. Global average and maximum pooling feed a 48-value projection and a
-48-value classification head.
-
-The vision branch has 269,547 trainable parameters. It produces three residual
-logits, which the model adds to the frozen seasonal logits. The trainer
-zero-initializes the final residual layer, so vision training starts from the
-selected seasonal prediction. Subtracting the two models' accuracy shows the
-effect of adding raster evidence to that prediction.
+48-value vision embedding. The model concatenates that embedding with an
+8-value seasonal embedding and learns a shared 48-value classification head.
+Both branches train end to end with unweighted hard cross-entropy.
 
 ```mermaid
 flowchart LR
     Timestamp[t4 timestamp and longitude] -->|derive phase| SeasonalFeatures[Four seasonal features]
-    SeasonalFeatures --> SeasonalMLP[Seasonal MLP]
-    SeasonalMLP -->|freeze after training| SeasonalLogits[Seasonal logits]
+    SeasonalFeatures --> SeasonalEncoder[Learned seasonal encoder]
 
-    MaskedModel[Masked NO2 model] -->|fill missing pixels| Completed[Four completed raster frames]
+    MaskedModel[Masked NO2 model] -->|fill missing pixels| Completed[Five completed raster frames]
     Completed --> FrameEncoder[Frame encoder with random initialization]
-    FrameEncoder --> ConvGRU[64-channel ConvGRU]
-    ConvGRU --> VisionHead[Vision projection and head]
-    VisionHead --> VisionLogits[Vision residual logits]
+    FrameEncoder --> ConvGRU[48-channel ConvGRU]
+    ConvGRU --> VisionEmbedding[48-value vision embedding]
 
-    SeasonalLogits --> Add[Add logits]
-    VisionLogits --> Add
-    Add --> Distribution[Class distribution]
+    SeasonalEncoder --> Concatenate[Concatenate embeddings]
+    VisionEmbedding --> Concatenate
+    Concatenate --> SharedHead[Learned classification head]
+    SharedHead --> Distribution[Class distribution]
 ```
 
 ## Optimization
 
-Both classifiers use AdamW, gradient clipping, validation-loss scheduling, CUDA
-mixed precision, and early stopping. Defaults allow 75 seasonal epochs and 100
-vision epochs. Training stops after 15 epochs without a lower validation loss;
+Both classifiers use unweighted hard cross-entropy, AdamW, gradient clipping,
+validation-loss scheduling, CUDA mixed precision, and early stopping. Defaults
+allow 75 seasonal epochs and 100 fusion epochs. Training stops after 15 epochs
+without a lower validation loss;
 the scheduler halves the learning rate after 10 such epochs. The maintained
 Slurm launcher uses a batch size of 128, a vision learning rate of `3e-4`, a
 48-channel vision width, a 48-value head, 30% dropout, and seed 42.
@@ -142,7 +138,7 @@ The trainer produces three summary figures:
 
 The characteristic figure assigns average heat input and unit count at the
 unique-AOI level. Month comes from each record's label-aligned final TEMPO
-timestamp. Labels report vision-seasonal accuracy minus seasonal accuracy.
+timestamp. Labels report learned-fusion accuracy minus seasonal accuracy.
 `accuracy_by_characteristic.csv` stores the plotted split, counts,
 stratification unit, value ranges, accuracies, and differences.
 
