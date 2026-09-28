@@ -181,24 +181,20 @@ def add_tempo_sequences(
     frame: pl.DataFrame,
     observations: pl.DataFrame,
     timesteps: int = SEQUENCE_TIMESTEPS,
-    label_timestep_index: int | None = None,
 ) -> pl.DataFrame:
-    """Match consecutive TEMPO sequences to the label scan's clock hour.
+    """Match consecutive TEMPO sequences to the final scan's clock hour.
 
     Args:
         frame: AOI-hour rows eligible for observation matching.
         observations: AOI scans with timestamps and source path lists.
         timesteps: Number of consecutive scans per record.
-        label_timestep_index: Zero-based scan ending the label interval.
 
     Returns:
         Rows carrying oldest-to-newest scan timestamps and paths.
     """
-    label_index = timesteps - 1 if label_timestep_index is None else label_timestep_index
     if timesteps < 2:
         raise ValueError("TEMPO sequences require at least two timesteps")
-    if not 0 < label_index < timesteps:
-        raise ValueError("label_timestep_index must select a timestep after t0")
+    final_index = timesteps - 1
     time_columns = [f"timestep_time_t{index}" for index in range(timesteps)]
     path_columns = [f"no2_paths_t{index}" for index in range(timesteps)]
     sequences = (
@@ -234,9 +230,9 @@ def add_tempo_sequences(
             )
         )
         .with_columns(
-            pl.col(time_columns[label_index]).dt.date().alias("date"),
-            pl.col(time_columns[label_index]).dt.hour().alias("hour"),
-            pl.col(f"_interval_minutes_{label_index}").alias("label_delta_mins"),
+            pl.col(time_columns[final_index]).dt.date().alias("date"),
+            pl.col(time_columns[final_index]).dt.hour().alias("hour"),
+            pl.col(f"_interval_minutes_{final_index}").alias("label_delta_mins"),
         )
         .select(
             AOI_ID_COL,

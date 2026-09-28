@@ -35,7 +35,6 @@ from preprocessing.tempo_mapping import load_tempo_mapping
 
 from config import (
     FULL_DATA_PARQUET,
-    LABEL_TIMESTEP_INDEX,
     SEQUENCE_TIMESTEPS,
     STRAT_BASE_DIR,
     STRATIFICATION_AOI_FRACTION,
@@ -59,6 +58,7 @@ AVG_NOX_END_COL = "avg_nox_end"
 HYBRID_THRESHOLD_COL = "hybrid_window_threshold"
 CLASS_NAMES = ("decrease", "steady", "increase")
 CLASS_COLORS = ("#3977af", "#999999", "#d65f4a")
+FINAL_TIMESTEP_INDEX = SEQUENCE_TIMESTEPS - 1
 TIMESTEP_COLUMNS = [
     column
     for index in range(SEQUENCE_TIMESTEPS)
@@ -312,7 +312,7 @@ def select_balanced_window_records(
         raise ValueError(f"[{split}] target classes have no records: {', '.join(sorted(missing_classes))}")
     records_per_class = int(counts["len"].min())
     selected = []
-    identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{LABEL_TIMESTEP_INDEX}_timestamp")
+    identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp")
     for class_name in CLASS_NAMES:
         class_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
         if class_name == "steady":
@@ -469,7 +469,7 @@ def _plot_monthly_class_prevalence(splits: dict[str, pl.DataFrame], output_path:
     # Compare final class prevalence across calendar months
     groups = list(range(1, 13))
     labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    timestamp = pl.col(f"t{LABEL_TIMESTEP_INDEX}_timestamp")
+    timestamp = pl.col(f"t{FINAL_TIMESTEP_INDEX}_timestamp")
     _plot_class_prevalence(
         splits,
         timestamp.dt.month(),
@@ -483,7 +483,7 @@ def _plot_monthly_class_prevalence(splits: dict[str, pl.DataFrame], output_path:
 
 def _plot_solar_hour_class_prevalence(splits: dict[str, pl.DataFrame], output_path: Path) -> None:
     # Compare final class prevalence by local solar hour of the final scan
-    timestamp = pl.col(f"t{LABEL_TIMESTEP_INDEX}_timestamp")
+    timestamp = pl.col(f"t{FINAL_TIMESTEP_INDEX}_timestamp")
     solar_hour = (
         timestamp.dt.hour() + timestamp.dt.minute() / 60 + timestamp.dt.second() / 3_600 + pl.col("lon") / 15
     ) % 24
@@ -772,12 +772,7 @@ def build_stratification_candidates(
         .drop("_has_invalid_nox")
     )
     frame = hourly.join(cluster_aois(aois, spatial_aois), on=AOI_ID_COL, how="left")
-    frame = add_tempo_sequences(
-        frame,
-        observations,
-        SEQUENCE_TIMESTEPS,
-        label_timestep_index=LABEL_TIMESTEP_INDEX,
-    )
+    frame = add_tempo_sequences(frame, observations, SEQUENCE_TIMESTEPS)
     frame = frame.filter(pl.col(f"timestep_time_t{SEQUENCE_TIMESTEPS - 1}").is_not_null())
     frame = add_timestep_nox(frame, hourly, SEQUENCE_TIMESTEPS)
     frame = add_window_average_targets(frame)

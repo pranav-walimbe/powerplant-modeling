@@ -106,7 +106,6 @@ PRETRAINED_MASKED_MODEL_WEIGHTS = os.getenv(  # masked-model checkpoint for gap 
     "/global/home/users/pranavwalimbe/masked_model_runs/a40/masked_no2_20260924_183700/checkpoints/best_masked_no2.pt",
 )
 SEQUENCE_TIMESTEPS = 5  # five causal rasters spanning the early and late label windows
-LABEL_TIMESTEP_INDEX = 4  # zero-based final raster timestep consumed by the label
 MODEL_IMAGE_KEYS = ("no2", "temperature_2m_k", "wind_u_80m_mps", "wind_v_80m_mps")
 MODEL_MASK_KEYS = ("no2_mask",)
 MODEL_ROBUST_IMAGE_KEYS = ("no2",)
