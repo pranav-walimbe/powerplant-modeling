@@ -230,8 +230,6 @@ CLAUDE.md
 !/scripts/slurm/train_masked_pretraining.sh
 !/scripts/slurm/train_model.sh
 
-# Local transport diagnostics
-/src/delta-model/modeling/visualize_transport.py
 /src/eda/
 /src/data-scraping/map_plant_zones.py
 /src/data-scraping/plant_zone_mapping.py
