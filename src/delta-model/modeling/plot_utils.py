@@ -14,16 +14,14 @@ from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classificat
 
 from config import MODEL_CLASS_NAMES
 
-MODEL_ORDER = ("seasonal", "learned_fusion", "transport_image_only", "transport_context")
+MODEL_ORDER = ("seasonal", "transport_image_only", "transport_context")
 MODEL_DISPLAY_NAMES = {
     "seasonal": "Seasonal",
-    "learned_fusion": "Learned fusion",
     "transport_image_only": "Transport image-only",
     "transport_context": "Transport + context",
 }
 MODEL_COLORS = {
     "seasonal": "#4C78A8",
-    "learned_fusion": "#F58518",
     "transport_image_only": "#54A24B",
     "transport_context": "#B279A2",
 }
@@ -198,8 +196,6 @@ def _stratum_result(
         "value_max": float(values.max()),
     }
     row.update({f"{model_name}_accuracy": _accuracy(frame.loc[mask]) for model_name, frame in frames.items()})
-    if "learned_fusion" in frames and "transport_context" in frames:
-        row["transport_context_gain"] = row["transport_context_accuracy"] - row["learned_fusion_accuracy"]
     return row
 
 

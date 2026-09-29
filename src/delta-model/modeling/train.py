@@ -1,4 +1,4 @@
-"""Train seasonal, late-fusion, and transport emissions-change classifiers."""
+"""Train seasonal and transport emissions-change classifiers."""
 
 import argparse
 import hashlib
@@ -17,7 +17,6 @@ from modeling.convgru import (
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
     MAX_CONTEXT_SCALE_DELTA,
-    LearnedEmbeddingFusionClassifier,
     TransportContextClassifier,
 )
 from modeling.dataset import (
@@ -426,7 +425,7 @@ def _class_counts(dataset: NOxDataset) -> dict[str, int]:
 
 
 def main() -> None:
-    """Train and evaluate seasonal, late-fusion, and transport classifiers."""
+    """Train and evaluate seasonal and transport classifiers."""
     args = parse_args()
     _seed_everything(args.seed)
     device = _device(args.device)
@@ -441,7 +440,7 @@ def main() -> None:
     run_dir = Path(RUNS_DIR) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    print(f"Training seasonal, learned-fusion, and transport classifiers on {device}; outputs: {run_dir}")
+    print(f"Training seasonal and transport classifiers on {device}; outputs: {run_dir}")
 
     masked_model_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
     stats = compute_stats("train", fixed_image_stats=masked_model_checkpoint["normalization_stats"])
@@ -490,9 +489,6 @@ def main() -> None:
         for split in datasets
     }
     seasonal_datasets = {split: NOxDataset(split, stats, load_images=False) for split in datasets}
-    eval_loaders = {
-        split: _loader(dataset, shuffle=False, args=args, device=device) for split, dataset in datasets.items()
-    }
     transport_eval_loaders = {
         split: _loader(dataset, shuffle=False, args=args, device=device)
         for split, dataset in transport_datasets.items()
@@ -545,21 +541,6 @@ def main() -> None:
 
     model_factories = (
         (
-            "learned_fusion",
-            "Learned-fusion classifier",
-            lambda: LearnedEmbeddingFusionClassifier(
-                len(MODEL_FEATURE_NAMES),
-                model_width=args.model_width,
-                head_dim=args.head_dim,
-                dropout=args.dropout,
-            ),
-            {
-                "fusion": "joint_raster_and_seasonal_embedding_concatenation",
-                "seasonal_encoder_training": "joint_end_to_end",
-            },
-            False,
-        ),
-        (
             "transport_image_only",
             "Transport image-only classifier",
             lambda: TransportContextClassifier(
@@ -573,7 +554,6 @@ def main() -> None:
                 "fusion": "aligned_observation_and_transport_bottleneck_fusion",
                 "context_conditioning": "none",
             },
-            True,
         ),
         (
             "transport_context",
@@ -590,21 +570,18 @@ def main() -> None:
                 "context_conditioning": "bounded_scale_only_bottleneck_residual",
                 "context_direct_to_classifier": False,
             },
-            True,
         ),
     )
     shuffled_context_frames: dict[str, pd.DataFrame] = {}
-    for model_name, phase_name, factory, model_metadata, uses_transport in model_factories:
+    for model_name, phase_name, factory, model_metadata in model_factories:
         _seed_everything(args.seed)
         model = factory().to(device)
-        active_datasets = transport_datasets if uses_transport else datasets
-        active_eval_loaders = transport_eval_loaders if uses_transport else eval_loaders
-        train_loader = _loader(active_datasets["train"], shuffle=True, args=args, device=device)
+        train_loader = _loader(transport_datasets["train"], shuffle=True, args=args, device=device)
         print(f"Training {model.num_params():,}-parameter {phase_name.lower()}")
         train_losses, validation_losses, best_loss = fit_model(
             model,
             train_loader,
-            active_eval_loaders["val"],
+            transport_eval_loaders["val"],
             device=device,
             epochs=args.epochs,
             learning_rate=args.learning_rate,
@@ -621,11 +598,11 @@ def main() -> None:
             phase_name=phase_name,
         )
         split_frames = {}
-        for split, loader in active_eval_loaders.items():
+        for split, loader in transport_eval_loaders.items():
             logits, probabilities, indices = run_inference(model, loader, device)
-            split_frames[split] = _prediction_frame(active_datasets[split], logits, probabilities, indices)
+            split_frames[split] = _prediction_frame(transport_datasets[split], logits, probabilities, indices)
             if model_name == "transport_context":
-                permutation = np.random.default_rng(args.seed).permutation(len(active_datasets[split]))
+                permutation = np.random.default_rng(args.seed).permutation(len(transport_datasets[split]))
                 shuffled_logits, shuffled_probabilities, shuffled_indices = run_inference(
                     model,
                     loader,
@@ -633,7 +610,7 @@ def main() -> None:
                     context_permutation=permutation,
                 )
                 shuffled_context_frames[split] = _prediction_frame(
-                    active_datasets[split],
+                    transport_datasets[split],
                     shuffled_logits,
                     shuffled_probabilities,
                     shuffled_indices,
@@ -656,7 +633,7 @@ def main() -> None:
 
     run_config = {
         "device": str(device),
-        "models": ["seasonal", "learned_fusion", "transport_image_only", "transport_context"],
+        "models": ["seasonal", "transport_image_only", "transport_context"],
         "loss": "unweighted_hard_cross_entropy",
         "batch_size": args.batch_size,
         "workers": args.workers,

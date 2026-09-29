@@ -1,16 +1,14 @@
 """Convolutional recurrent network for emissions-change classification."""
 
 import torch
-from modeling.mlp import SEASONAL_EMBEDDING_DIM, SeasonalMLP
 from torch import nn
 from torch.nn import functional as F
 
-from config import MODEL_CLASS_NAMES, MODEL_IMAGE_CHANNELS, MODEL_IMAGE_KEYS, MODEL_INPUT_CHANNELS, MODEL_MASK_KEYS
+from config import MODEL_CLASS_NAMES, MODEL_IMAGE_KEYS, MODEL_MASK_KEYS
 
 DEFAULT_HEAD_DIM = 64
 DEFAULT_DROPOUT = 0.20
 DEFAULT_MODEL_WIDTH = 64
-ENCODER_OUTPUT_CHANNELS = 64
 DEFAULT_CONTEXT_DROPOUT = 0.25
 MAX_CONTEXT_SCALE_DELTA = 0.25
 
@@ -46,56 +44,6 @@ class ResidualBlock(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.activation(self.block(inputs) + self.residual(inputs))
-
-
-class NO2Stem(nn.Module):
-    """Encode a completed NO2 raster with ordinary convolutions."""
-
-    def __init__(self, out_channels: int = 16) -> None:
-        super().__init__()
-        self.first = nn.Conv2d(1, out_channels, kernel_size=5, padding=2)
-        self.first_norm = _group_norm(out_channels)
-        self.second = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.second_norm = _group_norm(out_channels)
-        self.activation = nn.SiLU()
-
-    def forward(self, values: torch.Tensor) -> torch.Tensor:
-        features = self.activation(self.first_norm(self.first(values)))
-        return self.activation(self.second_norm(self.second(features)))
-
-
-class RasterFrameEncoder(nn.Module):
-    """Encode one completed NO2 and weather frame with ordinary convolutions."""
-
-    def __init__(self, model_width: int = DEFAULT_MODEL_WIDTH) -> None:
-        super().__init__()
-        stem_channels = model_width // 4
-        fusion_channels = model_width // 2
-        middle_channels = 3 * model_width // 4
-        self.no2_stem = NO2Stem(out_channels=stem_channels)
-        self.weather_stem = nn.Sequential(
-            nn.Conv2d(MODEL_IMAGE_CHANNELS - 1, stem_channels, kernel_size=5, padding=2, bias=False),
-            _group_norm(stem_channels),
-            nn.SiLU(inplace=True),
-        )
-        self.stem_fusion = nn.Sequential(
-            nn.Conv2d(2 * stem_channels, fusion_channels, kernel_size=1, bias=False),
-            _group_norm(fusion_channels),
-            nn.SiLU(inplace=True),
-        )
-        self.spatial_encoder = nn.Sequential(
-            ResidualBlock(fusion_channels, fusion_channels),
-            ResidualBlock(fusion_channels, middle_channels, stride=2),
-            ResidualBlock(middle_channels, middle_channels),
-            ResidualBlock(middle_channels, model_width, stride=2),
-            ResidualBlock(model_width, model_width),
-        )
-
-    def forward(self, no2: torch.Tensor, weather: torch.Tensor) -> torch.Tensor:
-        no2_features = self.no2_stem(no2)
-        weather_features = self.weather_stem(weather)
-        fused = self.stem_fusion(torch.cat((no2_features, weather_features), dim=1))
-        return self.spatial_encoder(fused)
 
 
 class ConvGRUCell(nn.Module):
@@ -172,108 +120,6 @@ class ContextScaleConditioner(nn.Module):
         observation_delta = self.max_scale_delta * torch.tanh(self.observation_projection(embedding)) * keep
         residual_delta = self.max_scale_delta * torch.tanh(self.residual_projection(embedding)) * keep
         return observation_delta, residual_delta
-
-
-class RasterConvGRUClassifier(nn.Module):
-    """Classify emissions changes from completed raster sequences."""
-
-    def __init__(
-        self,
-        *,
-        model_width: int = DEFAULT_MODEL_WIDTH,
-        head_dim: int = DEFAULT_HEAD_DIM,
-        dropout: float = DEFAULT_DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.model_width = model_width
-        self.frame_encoder = RasterFrameEncoder(model_width)
-        self.temporal_encoder = ConvGRUCell(model_width, model_width)
-        self.vision_projection = nn.Sequential(
-            nn.Linear(2 * model_width, model_width),
-            nn.LayerNorm(model_width),
-            nn.SiLU(inplace=True),
-            nn.Dropout(dropout),
-        )
-
-        self.classifier = nn.Sequential(
-            nn.Linear(model_width, head_dim),
-            nn.LayerNorm(head_dim),
-            nn.SiLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(head_dim, len(MODEL_CLASS_NAMES)),
-        )
-
-    def _encode_sequence(self, image: torch.Tensor) -> torch.Tensor:
-        batch_size, timesteps, channels, height, width = image.shape
-        if channels != MODEL_INPUT_CHANNELS:
-            raise ValueError(f"Expected {MODEL_INPUT_CHANNELS} completed raster channels, received {channels}")
-        frames = image[:, :, :MODEL_IMAGE_CHANNELS].reshape(
-            batch_size * timesteps,
-            MODEL_IMAGE_CHANNELS,
-            height,
-            width,
-        )
-        no2 = frames[:, :1]
-        weather = frames[:, 1:MODEL_IMAGE_CHANNELS]
-        encoded = self.frame_encoder(no2, weather)
-        encoded = encoded.reshape(batch_size, timesteps, *encoded.shape[1:])
-
-        hidden = encoded.new_zeros(
-            batch_size,
-            self.model_width,
-            encoded.shape[-2],
-            encoded.shape[-1],
-        )
-        for timestep in range(timesteps):
-            hidden = self.temporal_encoder(encoded[:, timestep], hidden)
-        average = F.adaptive_avg_pool2d(hidden, 1).flatten(1)
-        peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
-        return self.vision_projection(torch.cat((average, peak), dim=1))
-
-    def forward(
-        self,
-        image: torch.Tensor,
-        seasonal: torch.Tensor,
-        transport: torch.Tensor,
-    ) -> torch.Tensor:
-        del seasonal, transport
-        return self.classifier(self._encode_sequence(image))
-
-    def num_params(self) -> int:
-        return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
-
-
-class LearnedEmbeddingFusionClassifier(RasterConvGRUClassifier):
-    """Jointly classify learned raster and seasonal embeddings."""
-
-    def __init__(
-        self,
-        n_features: int,
-        *,
-        model_width: int = DEFAULT_MODEL_WIDTH,
-        head_dim: int = DEFAULT_HEAD_DIM,
-        dropout: float = DEFAULT_DROPOUT,
-    ) -> None:
-        super().__init__(model_width=model_width, head_dim=head_dim, dropout=dropout)
-        self.seasonal_encoder = SeasonalMLP(n_features).encoder
-        self.classifier = nn.Sequential(
-            nn.Linear(model_width + SEASONAL_EMBEDDING_DIM, head_dim),
-            nn.LayerNorm(head_dim),
-            nn.SiLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(head_dim, len(MODEL_CLASS_NAMES)),
-        )
-
-    def forward(
-        self,
-        image: torch.Tensor,
-        seasonal: torch.Tensor,
-        transport: torch.Tensor,
-    ) -> torch.Tensor:
-        del transport
-        vision_embedding = self._encode_sequence(image)
-        seasonal_embedding = self.seasonal_encoder(seasonal)
-        return self.classifier(torch.cat((vision_embedding, seasonal_embedding), dim=1))
 
 
 class TransportContextClassifier(nn.Module):

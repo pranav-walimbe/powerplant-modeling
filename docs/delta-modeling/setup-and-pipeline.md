@@ -133,11 +133,9 @@ sbatch scripts/slurm/train_model.sh
 ```
 
 The job stages split metadata in job-local `/tmp`, fills missing NO2 into
-temporary memory-mapped arrays, and trains four classifiers:
+temporary memory-mapped arrays, and trains three classifiers:
 
 - a four-input seasonal MLP;
-- a random-initialized 48-channel ConvGRU whose learned raster embedding is
-  concatenated with a jointly trained seasonal embedding;
 - a two-branch observation and advection-residual model without context;
 - the same two-branch model with scale-only bottleneck context conditioning.
 

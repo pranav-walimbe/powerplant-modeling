@@ -57,7 +57,6 @@ experiments. The horizontal-advection baseline leaves both disabled.
 The training job fits these models:
 
 - `seasonal`: the context-only MLP diagnostic;
-- `learned_fusion`: the existing late-fusion reference;
 - `transport_image_only`: the two raster branches without context;
 - `transport_context`: the same two branches with bottleneck conditioning.
 

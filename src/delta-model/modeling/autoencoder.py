@@ -1,11 +1,13 @@
 """Checkpoint-compatible masked autoencoder for completing NO2 rasters."""
 
 import torch
-from modeling.convgru import ENCODER_OUTPUT_CHANNELS, RasterFrameEncoder, ResidualBlock
+from modeling.convgru import ResidualBlock
 from torch import nn
 from torch.nn import functional as F
 
 from config import MODEL_IMAGE_CHANNELS
+
+ENCODER_OUTPUT_CHANNELS = 64
 
 
 def _group_norm(channels: int) -> nn.GroupNorm:
@@ -59,11 +61,28 @@ class _MaskedNO2Stem(nn.Module):
         return self.activation(self.second_norm(features)) * mask
 
 
-class _MaskedRasterFrameEncoder(RasterFrameEncoder):
-    # Reuse the common encoder layers with the checkpoint's partial-convolution stem
+class _MaskedRasterFrameEncoder(nn.Module):
+    # Recreate the masked-model encoder layout for checkpoint loading
     def __init__(self) -> None:
         super().__init__()
         self.no2_stem = _MaskedNO2Stem(out_channels=16)
+        self.weather_stem = nn.Sequential(
+            nn.Conv2d(MODEL_IMAGE_CHANNELS - 1, 16, kernel_size=5, padding=2, bias=False),
+            _group_norm(16),
+            nn.SiLU(inplace=True),
+        )
+        self.stem_fusion = nn.Sequential(
+            nn.Conv2d(32, 32, kernel_size=1, bias=False),
+            _group_norm(32),
+            nn.SiLU(inplace=True),
+        )
+        self.spatial_encoder = nn.Sequential(
+            ResidualBlock(32, 32),
+            ResidualBlock(32, 48, stride=2),
+            ResidualBlock(48, 48),
+            ResidualBlock(48, ENCODER_OUTPUT_CHANNELS, stride=2),
+            ResidualBlock(ENCODER_OUTPUT_CHANNELS, ENCODER_OUTPUT_CHANNELS),
+        )
 
     def forward(
         self,
