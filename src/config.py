@@ -51,16 +51,7 @@ IMG_RANGE = 72  # spatial extent of extracted image patch (km)
 TARGET_LABEL_MODE = "overlap_weighted"  # interpolate CAMPD hours over each TEMPO interval
 MIN_CITY_POPULATION = 500000  # metro population a populated place needs to count as a major city
 STRAT_BASE_DIR = "/global/scratch/projects/fc_nitrates/ddp/nox/nox_powerplant_data"  # stratified split output directory
-STRATIFICATION_WINDOW_ABSOLUTE_FLOOR = 250.0  # minimum early-to-late mean change for a change label
-STRATIFICATION_WINDOW_RELATIVE_FLOOR = 0.0  # disable the midpoint-relative change floor
-STRATIFICATION_WINDOW_THRESHOLD_LABEL = (
-    f"{STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr absolute"
-    if STRATIFICATION_WINDOW_RELATIVE_FLOOR == 0
-    else (
-        f"max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
-        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint)"
-    )
-)
+STRATIFICATION_WINDOW_THRESHOLD = 250.0  # early-to-late mean change required for a change label
 STRATIFICATION_MINIMUM_RECORDS_PER_CLASS = 20  # per-AOI candidate floor before geographic splitting
 STRATIFICATION_AOI_FRACTION = 0.50  # highest active-median-NOx share of mapped AOIs
 TRAIN_RECORDS_CSV = os.path.join(STRAT_BASE_DIR, "train_records.csv")  # train split metadata
