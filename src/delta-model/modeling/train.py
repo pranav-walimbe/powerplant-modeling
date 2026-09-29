@@ -546,7 +546,7 @@ def main() -> None:
                 dropout=args.dropout,
             ),
             {
-                "fusion": "observation_and_transport_embedding_concatenation",
+                "fusion": "aligned_observation_and_transport_bottleneck_fusion",
                 "context_conditioning": "none",
             },
         ),
@@ -565,7 +565,7 @@ def main() -> None:
                 dropout=args.dropout,
             ),
             {
-                "fusion": "observation_and_transport_embedding_concatenation",
+                "fusion": "aligned_observation_and_transport_bottleneck_fusion",
                 "context_conditioning": "bounded_scale_only_bottleneck_residual",
                 "context_direct_to_classifier": False,
             },

@@ -61,8 +61,10 @@ The training job fits these models:
 - `transport_context`: the same two branches with bottleneck conditioning.
 
 The observation branch processes five frames. The residual branch processes
-four transitions. Each branch uses a spatial encoder followed by its own
-ConvGRU. The classifier concatenates both temporal embeddings.
+four transitions. The first observation initializes the temporal state. Each
+later observation is aligned with the residual ending at that timestep, and
+the paired spatial bottlenecks are fused before a shared ConvGRU aggregates
+the four transitions. The classifier receives the resulting joint embedding.
 
 The context model sends the four-value vector through a small MLP. Separate
 projection heads produce bounded scale changes for the two branch bottlenecks.

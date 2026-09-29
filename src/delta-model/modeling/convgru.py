@@ -137,41 +137,6 @@ class BranchFrameEncoder(nn.Module):
         return self.encoder(inputs)
 
 
-class TemporalRasterBranch(nn.Module):
-    """Encode raster frames and aggregate their spatial features over time."""
-
-    def __init__(self, in_channels: int, model_width: int, dropout: float) -> None:
-        super().__init__()
-        self.model_width = model_width
-        self.frame_encoder = BranchFrameEncoder(in_channels, model_width)
-        self.temporal_encoder = ConvGRUCell(model_width, model_width)
-        self.projection = nn.Sequential(
-            nn.Linear(2 * model_width, model_width),
-            nn.LayerNorm(model_width),
-            nn.SiLU(inplace=True),
-            nn.Dropout(dropout),
-        )
-
-    def forward(self, sequence: torch.Tensor, scale_delta: torch.Tensor | None = None) -> torch.Tensor:
-        batch_size, timesteps, channels, height, width = sequence.shape
-        encoded = self.frame_encoder(sequence.reshape(batch_size * timesteps, channels, height, width))
-        encoded = encoded.reshape(batch_size, timesteps, *encoded.shape[1:])
-        if scale_delta is not None:
-            encoded = encoded + encoded * scale_delta[:, None, :, None, None]
-
-        hidden = encoded.new_zeros(
-            batch_size,
-            self.model_width,
-            encoded.shape[-2],
-            encoded.shape[-1],
-        )
-        for timestep in range(timesteps):
-            hidden = self.temporal_encoder(encoded[:, timestep], hidden)
-        average = F.adaptive_avg_pool2d(hidden, 1).flatten(1)
-        peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
-        return self.projection(torch.cat((average, peak), dim=1))
-
-
 class ContextScaleConditioner(nn.Module):
     """Produce bounded branch-specific scale changes from sample context."""
 
@@ -315,7 +280,7 @@ class LearnedEmbeddingFusionClassifier(RasterConvGRUClassifier):
 
 
 class TransportContextClassifier(nn.Module):
-    """Classify change from observation and transport-residual branches."""
+    """Classify change from aligned observation and transport features."""
 
     def __init__(
         self,
@@ -339,13 +304,25 @@ class TransportContextClassifier(nn.Module):
             residual_scale=residual_scale,
             decay_lifetime_hours=decay_lifetime_hours,
         )
-        self.observation_branch = TemporalRasterBranch(5, model_width, dropout)
-        self.residual_branch = TemporalRasterBranch(2, model_width, dropout)
+        self.observation_encoder = BranchFrameEncoder(5, model_width)
+        self.residual_encoder = BranchFrameEncoder(2, model_width)
+        self.branch_fusion = nn.Sequential(
+            nn.Conv2d(2 * model_width, model_width, kernel_size=1, bias=False),
+            _group_norm(model_width),
+            nn.SiLU(inplace=True),
+        )
+        self.temporal_encoder = ConvGRUCell(model_width, model_width)
+        self.temporal_projection = nn.Sequential(
+            nn.Linear(2 * model_width, model_width),
+            nn.LayerNorm(model_width),
+            nn.SiLU(inplace=True),
+            nn.Dropout(dropout),
+        )
         self.context_conditioner = (
             ContextScaleConditioner(n_features, model_width) if condition_on_context else None
         )
         self.classifier = nn.Sequential(
-            nn.Linear(2 * model_width, head_dim),
+            nn.Linear(model_width, head_dim),
             nn.LayerNorm(head_dim),
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
@@ -369,6 +346,39 @@ class TransportContextClassifier(nn.Module):
         )
         return image[:, :, indices]
 
+    def _encode_frames(
+        self,
+        encoder: BranchFrameEncoder,
+        sequence: torch.Tensor,
+        scale_delta: torch.Tensor | None,
+    ) -> torch.Tensor:
+        # Encode every frame before applying shared sample context
+        batch_size, timesteps, channels, height, width = sequence.shape
+        encoded = encoder(sequence.reshape(batch_size * timesteps, channels, height, width))
+        encoded = encoded.reshape(batch_size, timesteps, *encoded.shape[1:])
+        if scale_delta is not None:
+            encoded = encoded + encoded * scale_delta[:, None, :, None, None]
+        return encoded
+
+    def _aggregate_aligned(
+        self,
+        observation: torch.Tensor,
+        residual: torch.Tensor,
+    ) -> torch.Tensor:
+        # Initialize from the first observation then aggregate four aligned transitions
+        if observation.shape[1] != residual.shape[1] + 1:
+            raise ValueError(
+                "Expected one more observation timestep than transport-residual timesteps, "
+                f"received {observation.shape[1]} and {residual.shape[1]}"
+            )
+        hidden = observation[:, 0]
+        for transition in range(residual.shape[1]):
+            aligned = torch.cat((observation[:, transition + 1], residual[:, transition]), dim=1)
+            hidden = self.temporal_encoder(self.branch_fusion(aligned), hidden)
+        average = F.adaptive_avg_pool2d(hidden, 1).flatten(1)
+        peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
+        return self.temporal_projection(torch.cat((average, peak), dim=1))
+
     def forward(
         self,
         image: torch.Tensor,
@@ -387,15 +397,17 @@ class TransportContextClassifier(nn.Module):
         residual_delta = None
         if self.context_conditioner is not None:
             observation_delta, residual_delta = self.context_conditioner(seasonal)
-        observation_embedding = self.observation_branch(
+        observation_features = self._encode_frames(
+            self.observation_encoder,
             self._observation_sequence(image),
             observation_delta,
         )
-        residual_embedding = self.residual_branch(
+        residual_features = self._encode_frames(
+            self.residual_encoder,
             torch.cat((residual, residual_quality), dim=2),
             residual_delta,
         )
-        return self.classifier(torch.cat((observation_embedding, residual_embedding), dim=1))
+        return self.classifier(self._aggregate_aligned(observation_features, residual_features))
 
     def num_params(self) -> int:
         """Count trainable model parameters."""
