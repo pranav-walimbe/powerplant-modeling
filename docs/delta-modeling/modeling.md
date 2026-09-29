@@ -57,21 +57,18 @@ experiments. The horizontal-advection baseline leaves both disabled.
 The training job fits these models:
 
 - `seasonal`: the context-only MLP diagnostic;
-- `transport_image_only`: the two raster branches without context;
-- `transport_context`: the same two branches with bottleneck conditioning.
+- `vision`: the context-aware observation and transport-residual classifier.
 
 The observation branch processes five frames. The residual branch processes
 four transitions. The first observation initializes the temporal state. Each
 later observation is aligned with the residual ending at that timestep, and
 the paired spatial bottlenecks are fused before a shared ConvGRU aggregates
-the four transitions. The classifier receives the resulting joint embedding.
+the four transitions and produces one visual embedding.
 
-The context model sends the four-value vector through a small MLP. Separate
-projection heads produce bounded scale changes for the two branch bottlenecks.
-The projections start at identity, use no additive shift, and share one sample
-context across all timesteps. Context has no direct path to the classifier.
-Training drops context for a random share of samples. The job also saves
-predictions and metrics from shuffled-context inference.
+The vision model sends the four-value context vector through a small MLP once
+per sample. It concatenates that context embedding with the visual embedding
+before classification. Training drops context for a random share of samples.
+The job also saves predictions and metrics from shuffled-context inference.
 
 ## Optimization
 

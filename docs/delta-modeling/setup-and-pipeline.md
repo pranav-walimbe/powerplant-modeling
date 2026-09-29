@@ -133,11 +133,10 @@ sbatch scripts/slurm/train_model.sh
 ```
 
 The job stages split metadata in job-local `/tmp`, fills missing NO2 into
-temporary memory-mapped arrays, and trains three classifiers:
+temporary memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;
-- a two-branch observation and advection-residual model without context;
-- the same two-branch model with scale-only bottleneck context conditioning.
+- a context-aware vision model with observation and advection-residual inputs.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on
 `savio4_gpu` with `a5k_gpu4_normal`. It emails split and class accuracy,

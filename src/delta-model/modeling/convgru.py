@@ -1,6 +1,7 @@
 """Convolutional recurrent network for emissions-change classification."""
 
 import torch
+from modeling.mlp import SEASONAL_EMBEDDING_DIM, build_seasonal_encoder
 from torch import nn
 from torch.nn import functional as F
 
@@ -10,7 +11,6 @@ DEFAULT_HEAD_DIM = 64
 DEFAULT_DROPOUT = 0.20
 DEFAULT_MODEL_WIDTH = 64
 DEFAULT_CONTEXT_DROPOUT = 0.25
-MAX_CONTEXT_SCALE_DELTA = 0.25
 
 
 def _group_norm(channels: int) -> nn.GroupNorm:
@@ -84,57 +84,20 @@ class BranchFrameEncoder(nn.Module):
         return self.encoder(inputs)
 
 
-class ContextScaleConditioner(nn.Module):
-    """Produce bounded branch-specific scale changes from sample context."""
-
-    def __init__(
-        self,
-        n_features: int,
-        model_width: int,
-        *,
-        context_dropout: float = DEFAULT_CONTEXT_DROPOUT,
-        max_scale_delta: float = MAX_CONTEXT_SCALE_DELTA,
-    ) -> None:
-        super().__init__()
-        context_width = max(16, 4 * n_features)
-        self.context_dropout = context_dropout
-        self.max_scale_delta = max_scale_delta
-        self.encoder = nn.Sequential(
-            nn.Linear(n_features, context_width),
-            nn.SiLU(inplace=True),
-            nn.Linear(context_width, context_width),
-            nn.SiLU(inplace=True),
-        )
-        self.observation_projection = nn.Linear(context_width, model_width)
-        self.residual_projection = nn.Linear(context_width, model_width)
-        nn.init.zeros_(self.observation_projection.weight)
-        nn.init.zeros_(self.observation_projection.bias)
-        nn.init.zeros_(self.residual_projection.weight)
-        nn.init.zeros_(self.residual_projection.bias)
-
-    def forward(self, context: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        embedding = self.encoder(context)
-        keep = torch.ones(context.shape[0], 1, device=context.device, dtype=context.dtype)
-        if self.training and self.context_dropout > 0.0:
-            keep = (torch.rand_like(keep) >= self.context_dropout).to(context.dtype)
-        observation_delta = self.max_scale_delta * torch.tanh(self.observation_projection(embedding)) * keep
-        residual_delta = self.max_scale_delta * torch.tanh(self.residual_projection(embedding)) * keep
-        return observation_delta, residual_delta
-
-
-class TransportContextClassifier(nn.Module):
-    """Classify change from aligned observation and transport features."""
+class VisionClassifier(nn.Module):
+    """Classify change from visual and sample-context embeddings."""
 
     def __init__(
         self,
         n_features: int,
         *,
-        condition_on_context: bool,
         model_width: int = DEFAULT_MODEL_WIDTH,
         head_dim: int = DEFAULT_HEAD_DIM,
         dropout: float = DEFAULT_DROPOUT,
+        context_dropout: float = DEFAULT_CONTEXT_DROPOUT,
     ) -> None:
         super().__init__()
+        self.context_dropout = context_dropout
         self.observation_encoder = BranchFrameEncoder(5, model_width)
         self.residual_encoder = BranchFrameEncoder(2, model_width)
         self.branch_fusion = nn.Sequential(
@@ -149,11 +112,9 @@ class TransportContextClassifier(nn.Module):
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
         )
-        self.context_conditioner = (
-            ContextScaleConditioner(n_features, model_width) if condition_on_context else None
-        )
+        self.context_encoder = build_seasonal_encoder(n_features)
         self.classifier = nn.Sequential(
-            nn.Linear(model_width, head_dim),
+            nn.Linear(model_width + SEASONAL_EMBEDDING_DIM, head_dim),
             nn.LayerNorm(head_dim),
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
@@ -181,15 +142,11 @@ class TransportContextClassifier(nn.Module):
         self,
         encoder: BranchFrameEncoder,
         sequence: torch.Tensor,
-        scale_delta: torch.Tensor | None,
     ) -> torch.Tensor:
-        # Encode every frame before applying shared sample context
+        # Encode every frame with the selected visual branch
         batch_size, timesteps, channels, height, width = sequence.shape
         encoded = encoder(sequence.reshape(batch_size * timesteps, channels, height, width))
-        encoded = encoded.reshape(batch_size, timesteps, *encoded.shape[1:])
-        if scale_delta is not None:
-            encoded = encoded + encoded * scale_delta[:, None, :, None, None]
-        return encoded
+        return encoded.reshape(batch_size, timesteps, *encoded.shape[1:])
 
     def _aggregate_aligned(
         self,
@@ -210,27 +167,33 @@ class TransportContextClassifier(nn.Module):
         peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
         return self.temporal_projection(torch.cat((average, peak), dim=1))
 
+    def _encode_context(self, context: torch.Tensor) -> torch.Tensor:
+        # Encode context once and drop it by sample during training
+        embedding = self.context_encoder(context)
+        if self.training and self.context_dropout > 0.0:
+            keep = (
+                torch.rand(context.shape[0], 1, device=context.device) >= self.context_dropout
+            ).to(context.dtype)
+            embedding = embedding * keep
+        return embedding
+
     def forward(
         self,
         image: torch.Tensor,
         seasonal: torch.Tensor,
         transport: torch.Tensor,
     ) -> torch.Tensor:
-        observation_delta = None
-        residual_delta = None
-        if self.context_conditioner is not None:
-            observation_delta, residual_delta = self.context_conditioner(seasonal)
         observation_features = self._encode_frames(
             self.observation_encoder,
             self._observation_sequence(image),
-            observation_delta,
         )
         residual_features = self._encode_frames(
             self.residual_encoder,
             transport,
-            residual_delta,
         )
-        return self.classifier(self._aggregate_aligned(observation_features, residual_features))
+        vision_embedding = self._aggregate_aligned(observation_features, residual_features)
+        context_embedding = self._encode_context(seasonal)
+        return self.classifier(torch.cat((vision_embedding, context_embedding), dim=1))
 
     def num_params(self) -> int:
         """Count trainable model parameters."""

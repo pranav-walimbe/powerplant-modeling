@@ -26,10 +26,10 @@ for artifact in \
     fi
 done
 
-echo "Emailing seasonal and transport-model results to ${recipient} via ${mail_host}"
+echo "Emailing seasonal and vision-model results to ${recipient} via ${mail_host}"
 mail_log_offset=$(ssh -o BatchMode=yes -o ConnectTimeout=15 \
     "${mail_host}" stat -c %s "${mail_log}")
-printf 'NO2 classification training completed successfully.\n\nThe attachments compare seasonal, transport image-only, and context-conditioned models. Evaluation slices include AOI characteristics, test month, and test midpoint local solar hour.\n\nRun: %s\nJob: %s\n' \
+printf 'NO2 classification training completed successfully.\n\nThe attachments compare seasonal and context-aware vision models. Evaluation slices include AOI characteristics, test month, and test midpoint local solar hour.\n\nRun: %s\nJob: %s\n' \
     "${run_dir}" \
     "${job_id}" \
     | ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \

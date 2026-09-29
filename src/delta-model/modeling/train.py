@@ -1,4 +1,4 @@
-"""Train seasonal and transport emissions-change classifiers."""
+"""Train seasonal and context-aware vision emissions-change classifiers."""
 
 import argparse
 import hashlib
@@ -16,8 +16,7 @@ from modeling.convgru import (
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
-    MAX_CONTEXT_SCALE_DELTA,
-    TransportContextClassifier,
+    VisionClassifier,
 )
 from modeling.dataset import (
     MODEL_FEATURE_NAMES,
@@ -425,7 +424,7 @@ def _class_counts(dataset: NOxDataset) -> dict[str, int]:
 
 
 def main() -> None:
-    """Train and evaluate seasonal and transport classifiers."""
+    """Train and evaluate seasonal and context-aware vision classifiers."""
     args = parse_args()
     _seed_everything(args.seed)
     device = _device(args.device)
@@ -440,7 +439,7 @@ def main() -> None:
     run_dir = Path(RUNS_DIR) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    print(f"Training seasonal and transport classifiers on {device}; outputs: {run_dir}")
+    print(f"Training seasonal and vision classifiers on {device}; outputs: {run_dir}")
 
     masked_model_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
     stats = compute_stats("train", fixed_image_stats=masked_model_checkpoint["normalization_stats"])
@@ -539,101 +538,75 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    model_factories = (
-        (
-            "transport_image_only",
-            "Transport image-only classifier",
-            lambda: TransportContextClassifier(
-                len(MODEL_FEATURE_NAMES),
-                condition_on_context=False,
-                model_width=args.model_width,
-                head_dim=args.head_dim,
-                dropout=args.dropout,
-            ),
-            {
-                "fusion": "aligned_observation_and_transport_bottleneck_fusion",
-                "context_conditioning": "none",
-            },
-        ),
-        (
-            "transport_context",
-            "Transport context-conditioned classifier",
-            lambda: TransportContextClassifier(
-                len(MODEL_FEATURE_NAMES),
-                condition_on_context=True,
-                model_width=args.model_width,
-                head_dim=args.head_dim,
-                dropout=args.dropout,
-            ),
-            {
-                "fusion": "aligned_observation_and_transport_bottleneck_fusion",
-                "context_conditioning": "bounded_scale_only_bottleneck_residual",
-                "context_direct_to_classifier": False,
-            },
-        ),
-    )
-    shuffled_context_frames: dict[str, pd.DataFrame] = {}
-    for model_name, phase_name, factory, model_metadata in model_factories:
-        _seed_everything(args.seed)
-        model = factory().to(device)
-        train_loader = _loader(transport_datasets["train"], shuffle=True, args=args, device=device)
-        print(f"Training {model.num_params():,}-parameter {phase_name.lower()}")
-        train_losses, validation_losses, best_loss = fit_model(
-            model,
-            train_loader,
-            transport_eval_loaders["val"],
-            device=device,
-            epochs=args.epochs,
-            learning_rate=args.learning_rate,
-            args=args,
-            checkpoint_path=checkpoint_dir / f"best_{model_name}_classifier.pt",
-            checkpoint_metadata={
-                **common_checkpoint_metadata,
-                **model_metadata,
-                "model_width": args.model_width,
-                "encoder_initialization": "random",
-                "transport_residual_stats": transport_residual_stats,
-                "loss": "unweighted_hard_cross_entropy",
-            },
-            phase_name=phase_name,
-        )
-        split_frames = {}
-        for split, loader in transport_eval_loaders.items():
-            logits, probabilities, indices = run_inference(model, loader, device)
-            split_frames[split] = _prediction_frame(transport_datasets[split], logits, probabilities, indices)
-            if model_name == "transport_context":
-                permutation = np.random.default_rng(args.seed).permutation(len(transport_datasets[split]))
-                shuffled_logits, shuffled_probabilities, shuffled_indices = run_inference(
-                    model,
-                    loader,
-                    device,
-                    context_permutation=permutation,
-                )
-                shuffled_context_frames[split] = _prediction_frame(
-                    transport_datasets[split],
-                    shuffled_logits,
-                    shuffled_probabilities,
-                    shuffled_indices,
-                )
-        histories[model_name] = (train_losses, validation_losses)
-        model_frames[model_name] = split_frames
-        training_summaries[model_name] = {
-            "maximum_epochs": args.epochs,
-            "learning_rate": args.learning_rate,
-            "parameters": model.num_params(),
+    _seed_everything(args.seed)
+    vision_model = VisionClassifier(
+        len(MODEL_FEATURE_NAMES),
+        model_width=args.model_width,
+        head_dim=args.head_dim,
+        dropout=args.dropout,
+    ).to(device)
+    vision_train_loader = _loader(transport_datasets["train"], shuffle=True, args=args, device=device)
+    print(f"Training {vision_model.num_params():,}-parameter vision classifier")
+    vision_train_losses, vision_validation_losses, vision_best_loss = fit_model(
+        vision_model,
+        vision_train_loader,
+        transport_eval_loaders["val"],
+        device=device,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        args=args,
+        checkpoint_path=checkpoint_dir / "best_vision_classifier.pt",
+        checkpoint_metadata={
+            **common_checkpoint_metadata,
+            "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
+            "context_fusion": "post_temporal_embedding_concatenation",
+            "context_dropout": DEFAULT_CONTEXT_DROPOUT,
             "model_width": args.model_width,
-            "best_validation_loss": best_loss,
             "encoder_initialization": "random",
+            "transport_residual_stats": transport_residual_stats,
             "loss": "unweighted_hard_cross_entropy",
-            **model_metadata,
-        }
-        del model, train_loader
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        },
+        phase_name="Vision classifier",
+    )
+    vision_frames = {}
+    shuffled_context_frames: dict[str, pd.DataFrame] = {}
+    for split, loader in transport_eval_loaders.items():
+        logits, probabilities, indices = run_inference(vision_model, loader, device)
+        vision_frames[split] = _prediction_frame(transport_datasets[split], logits, probabilities, indices)
+        permutation = np.random.default_rng(args.seed).permutation(len(transport_datasets[split]))
+        shuffled_logits, shuffled_probabilities, shuffled_indices = run_inference(
+            vision_model,
+            loader,
+            device,
+            context_permutation=permutation,
+        )
+        shuffled_context_frames[split] = _prediction_frame(
+            transport_datasets[split],
+            shuffled_logits,
+            shuffled_probabilities,
+            shuffled_indices,
+        )
+    histories["vision"] = (vision_train_losses, vision_validation_losses)
+    model_frames["vision"] = vision_frames
+    training_summaries["vision"] = {
+        "maximum_epochs": args.epochs,
+        "learning_rate": args.learning_rate,
+        "parameters": vision_model.num_params(),
+        "model_width": args.model_width,
+        "best_validation_loss": vision_best_loss,
+        "encoder_initialization": "random",
+        "loss": "unweighted_hard_cross_entropy",
+        "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
+        "context_fusion": "post_temporal_embedding_concatenation",
+        "context_dropout": DEFAULT_CONTEXT_DROPOUT,
+    }
+    del vision_model, vision_train_loader
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
     run_config = {
         "device": str(device),
-        "models": ["seasonal", "transport_image_only", "transport_context"],
+        "models": ["seasonal", "vision"],
         "loss": "unweighted_hard_cross_entropy",
         "batch_size": args.batch_size,
         "workers": args.workers,
@@ -685,13 +658,10 @@ def main() -> None:
             "residual_quality": "current_no2_quality_times_warped_source_no2_quality",
             "residual_normalization": transport_residual_stats,
         },
-        "context_conditioning": {
-            "location": "spatial_bottleneck",
-            "method": "bounded_scale_only_residual_modulation",
-            "identity_initialized": True,
-            "direct_classifier_path": False,
+        "context_fusion": {
+            "location": "post_temporal_embedding",
+            "method": "embedding_concatenation",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-            "maximum_scale_delta": MAX_CONTEXT_SCALE_DELTA,
         },
     }
     with (run_dir / "run_config.json").open("w") as destination:
@@ -703,12 +673,12 @@ def main() -> None:
     with (run_dir / "shuffled_context_results.json").open("w") as destination:
         json.dump(shuffled_context_results, destination, indent=2)
     for split, frame in shuffled_context_frames.items():
-        frame.to_csv(run_dir / f"transport_context_shuffled_{split}_predictions.csv", index=False)
+        frame.to_csv(run_dir / f"vision_shuffled_{split}_predictions.csv", index=False)
 
     plot_split_class_accuracy(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
-    save_results(model_frames, run_dir, primary_model_name="transport_context")
+    save_results(model_frames, run_dir, primary_model_name="vision")
 
 
 if __name__ == "__main__":

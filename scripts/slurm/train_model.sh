@@ -75,7 +75,7 @@ if [[ -z "${run_dir}" ]]; then
     exit 1
 fi
 
-echo "Emailing seasonal and transport-model results"
+echo "Emailing seasonal and vision-model results"
 bash scripts/slurm/email_model_results.sh \
     "${run_dir}" \
     "${SLURM_JOB_ID}" \

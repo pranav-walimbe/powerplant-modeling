@@ -14,16 +14,14 @@ from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classificat
 
 from config import MODEL_CLASS_NAMES
 
-MODEL_ORDER = ("seasonal", "transport_image_only", "transport_context")
+MODEL_ORDER = ("seasonal", "vision")
 MODEL_DISPLAY_NAMES = {
     "seasonal": "Seasonal",
-    "transport_image_only": "Transport image-only",
-    "transport_context": "Transport + context",
+    "vision": "Vision",
 }
 MODEL_COLORS = {
     "seasonal": "#4C78A8",
-    "transport_image_only": "#54A24B",
-    "transport_context": "#B279A2",
+    "vision": "#B279A2",
 }
 SPLIT_ORDER = ("train", "val", "test")
 STRATUM_ORDER = ("Low", "Middle", "High")
