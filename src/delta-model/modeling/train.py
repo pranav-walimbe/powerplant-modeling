@@ -16,6 +16,7 @@ from modeling.convgru import (
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
+    MAX_CONTEXT_SCALE_DELTA,
     VisionClassifier,
 )
 from modeling.dataset import (
@@ -559,9 +560,10 @@ def main() -> None:
         checkpoint_path=checkpoint_dir / "best_vision_classifier.pt",
         checkpoint_metadata={
             **common_checkpoint_metadata,
-            "visual_fusion": "aligned_observation_transport_context_fusion",
-            "context_fusion": "encoded_spatial_channel_concatenation_per_timestep",
+            "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
+            "context_fusion": "bounded_scale_only_film_per_timestep",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
+            "maximum_context_scale_delta": MAX_CONTEXT_SCALE_DELTA,
             "model_width": args.model_width,
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
@@ -597,9 +599,10 @@ def main() -> None:
         "best_validation_loss": vision_best_loss,
         "encoder_initialization": "random",
         "loss": "unweighted_hard_cross_entropy",
-        "visual_fusion": "aligned_observation_transport_context_fusion",
-        "context_fusion": "encoded_spatial_channel_concatenation_per_timestep",
+        "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
+        "context_fusion": "bounded_scale_only_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
+        "maximum_context_scale_delta": MAX_CONTEXT_SCALE_DELTA,
     }
     del vision_model, vision_train_loader
     if device.type == "cuda":
@@ -661,11 +664,13 @@ def main() -> None:
             "residual_normalization": transport_residual_stats,
         },
         "context_fusion": {
-            "location": "before_initialization_and_each_convgru_update",
-            "method": "encoded_spatial_channel_concatenation",
+            "location": "branch_spatial_bottlenecks_at_each_timestep",
+            "method": "bounded_scale_only_film",
             "initial_timestep_context": True,
-            "scale_or_shift_modulation": False,
+            "identity_initialized": True,
+            "additive_shift": False,
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
+            "maximum_scale_delta": MAX_CONTEXT_SCALE_DELTA,
         },
     }
     with (run_dir / "run_config.json").open("w") as destination:

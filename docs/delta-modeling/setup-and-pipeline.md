@@ -136,8 +136,8 @@ The job stages split metadata in job-local `/tmp`, fills missing NO2 into
 temporary memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;
-- a vision model that fuses observation, advection-residual, and encoded
-  context features at each timestep.
+- a vision model with scale-only context modulation of observation and
+  advection-residual features at each timestep.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on
 `savio4_gpu` with `a5k_gpu4_normal`. It emails split and class accuracy,

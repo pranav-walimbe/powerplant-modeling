@@ -11,6 +11,7 @@ DEFAULT_HEAD_DIM = 64
 DEFAULT_DROPOUT = 0.20
 DEFAULT_MODEL_WIDTH = 64
 DEFAULT_CONTEXT_DROPOUT = 0.25
+MAX_CONTEXT_SCALE_DELTA = 0.25
 
 
 def _group_norm(channels: int) -> nn.GroupNorm:
@@ -101,23 +102,14 @@ class VisionClassifier(nn.Module):
         self.observation_encoder = BranchFrameEncoder(5, model_width)
         self.residual_encoder = BranchFrameEncoder(2, model_width)
         self.context_encoder = build_seasonal_encoder(n_features)
-        self.initial_fusion = nn.Sequential(
-            nn.Conv2d(
-                model_width + SEASONAL_EMBEDDING_DIM,
-                model_width,
-                kernel_size=1,
-                bias=False,
-            ),
-            _group_norm(model_width),
-            nn.SiLU(inplace=True),
-        )
-        self.transition_fusion = nn.Sequential(
-            nn.Conv2d(
-                2 * model_width + SEASONAL_EMBEDDING_DIM,
-                model_width,
-                kernel_size=1,
-                bias=False,
-            ),
+        self.observation_scale_projection = nn.Linear(SEASONAL_EMBEDDING_DIM, model_width)
+        self.residual_scale_projection = nn.Linear(SEASONAL_EMBEDDING_DIM, model_width)
+        nn.init.zeros_(self.observation_scale_projection.weight)
+        nn.init.zeros_(self.observation_scale_projection.bias)
+        nn.init.zeros_(self.residual_scale_projection.weight)
+        nn.init.zeros_(self.residual_scale_projection.bias)
+        self.branch_fusion = nn.Sequential(
+            nn.Conv2d(2 * model_width, model_width, kernel_size=1, bias=False),
             _group_norm(model_width),
             nn.SiLU(inplace=True),
         )
@@ -167,42 +159,44 @@ class VisionClassifier(nn.Module):
         self,
         observation: torch.Tensor,
         residual: torch.Tensor,
-        context: torch.Tensor,
+        observation_scale: torch.Tensor,
+        residual_scale: torch.Tensor,
     ) -> torch.Tensor:
-        # Fuse real inputs at each timestamp without synthesizing an initial residual
+        # Modulate real inputs without synthesizing an initial residual
         if observation.shape[1] != residual.shape[1] + 1:
             raise ValueError(
                 "Expected one more observation timestep than transport-residual timesteps, "
                 f"received {observation.shape[1]} and {residual.shape[1]}"
             )
-        if observation.shape[:2] != context.shape[:2]:
+        if observation.shape[:2] != observation_scale.shape[:2]:
             raise ValueError(
-                "Expected one context vector per observation timestep, "
-                f"received {observation.shape[:2]} and {context.shape[:2]}"
+                "Expected one observation scale per observation timestep, "
+                f"received {observation.shape[:2]} and {observation_scale.shape[:2]}"
             )
-        spatial_context = context[:, :, :, None, None].expand(
-            -1,
-            -1,
-            -1,
-            observation.shape[-2],
-            observation.shape[-1],
-        )
-        hidden = self.initial_fusion(torch.cat((observation[:, 0], spatial_context[:, 0]), dim=1))
+        if residual.shape[:2] != residual_scale.shape[:2]:
+            raise ValueError(
+                "Expected one residual scale per transport timestep, "
+                f"received {residual.shape[:2]} and {residual_scale.shape[:2]}"
+            )
+        hidden = observation[:, 0] * observation_scale[:, 0, :, None, None]
         for transition in range(residual.shape[1]):
+            observation_features = (
+                observation[:, transition + 1]
+                * observation_scale[:, transition + 1, :, None, None]
+            )
+            residual_features = (
+                residual[:, transition] * residual_scale[:, transition, :, None, None]
+            )
             aligned = torch.cat(
-                (
-                    observation[:, transition + 1],
-                    residual[:, transition],
-                    spatial_context[:, transition + 1],
-                ),
+                (observation_features, residual_features),
                 dim=1,
             )
-            hidden = self.temporal_encoder(self.transition_fusion(aligned), hidden)
+            hidden = self.temporal_encoder(self.branch_fusion(aligned), hidden)
         average = F.adaptive_avg_pool2d(hidden, 1).flatten(1)
         peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
         return self.temporal_projection(torch.cat((average, peak), dim=1))
 
-    def _encode_context(self, context: torch.Tensor) -> torch.Tensor:
+    def _context_scales(self, context: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Keep dropout consistent across every timestep in a sample
         embedding = self.context_encoder(context)
         if self.training and self.context_dropout > 0.0:
@@ -210,7 +204,13 @@ class VisionClassifier(nn.Module):
                 torch.rand(context.shape[0], 1, 1, device=context.device) >= self.context_dropout
             ).to(context.dtype)
             embedding = embedding * keep
-        return embedding
+        observation_delta = MAX_CONTEXT_SCALE_DELTA * torch.tanh(
+            self.observation_scale_projection(embedding)
+        )
+        residual_delta = MAX_CONTEXT_SCALE_DELTA * torch.tanh(
+            self.residual_scale_projection(embedding[:, 1:])
+        )
+        return 1.0 + observation_delta, 1.0 + residual_delta
 
     def forward(
         self,
@@ -226,11 +226,12 @@ class VisionClassifier(nn.Module):
             self.residual_encoder,
             transport,
         )
-        context_embedding = self._encode_context(seasonal)
+        observation_scale, residual_scale = self._context_scales(seasonal)
         vision_embedding = self._aggregate_aligned(
             observation_features,
             residual_features,
-            context_embedding,
+            observation_scale,
+            residual_scale,
         )
         return self.classifier(vision_embedding)
 
