@@ -219,7 +219,6 @@ CLAUDE.md
 !/scripts/slurm/build_tempo_mapping_observations.sh
 !/scripts/slurm/email_masked_model_results.sh
 !/scripts/slurm/email_model_results.sh
-!/scripts/slurm/email_transport_predictions.sh
 !/scripts/slurm/generate_dataset.sh
 !/scripts/slurm/generate_masked_pretraining_dataset.sh
 !/scripts/slurm/refresh_campd_emissions.sh
@@ -230,7 +229,9 @@ CLAUDE.md
 !/scripts/slurm/submit_tempo_mapping.sh
 !/scripts/slurm/train_masked_pretraining.sh
 !/scripts/slurm/train_model.sh
-!/scripts/slurm/visualize_transport_predictions.sh
+
+# Local transport diagnostics
+/src/delta-model/modeling/visualize_transport.py
 /src/eda/
 /src/data-scraping/map_plant_zones.py
 /src/data-scraping/plant_zone_mapping.py
