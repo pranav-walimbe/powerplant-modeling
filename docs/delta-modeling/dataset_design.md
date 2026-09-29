@@ -36,15 +36,16 @@ The pipeline applies these steps in order:
    `t0_nox` through `t4_nox`.
 5. Calculate elapsed-time-weighted trapezoidal means over `t0` through `t2`
    and `t2` through `t4`. Store them as `avg_nox_start` and `avg_nox_end`.
-6. Assign classes from `avg_nox_end - avg_nox_start` using the larger of a
-   200 lb/hr absolute floor or 20% of the midpoint between the two means.
+6. Assign classes from `avg_nox_end - avg_nox_start` using a 250 lb/hr
+   absolute threshold.
 7. Retain only AOIs providing at least 20 candidate records in every class.
 8. Assign each overlap cluster to one split with a deterministic procedure that
    targets the 70/15/15 ratio for each class.
 9. Downsample each class to the smallest class count within its split. Use
-   deterministic weighted sampling for steady records, with weight increasing
-   as the absolute early-to-late change approaches zero. Sample increase and
-   decrease records by deterministic random order.
+   deterministic weighted sampling for steady records with weight
+   `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily favors
+   records nearest zero change. Sample increase and decrease records by
+   deterministic random order.
 10. Generate rasters and reject records that fail coverage or source-file checks.
 
 Raster quality control can change class counts after balancing. The finalizer
@@ -64,8 +65,7 @@ weighted_mean(a:b:c) =
 avg_nox_start = weighted_mean(t0:t1:t2)
 avg_nox_end = weighted_mean(t2:t3:t4)
 window_change = avg_nox_end - avg_nox_start
-window_midpoint = (avg_nox_start + avg_nox_end) / 2
-hybrid_window_threshold = max(200, 0.20 * window_midpoint)
+hybrid_window_threshold = 250
 ```
 
 Changes at or below the negative threshold are decreases. Changes at or above
