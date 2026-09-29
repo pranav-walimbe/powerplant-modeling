@@ -1,6 +1,6 @@
 # Modeling
 
-The delta trainer compares four classifiers on the same geographic splits and
+The delta trainer compares two classifiers on the same geographic splits and
 fixed seed. A pretrained masked model fills low-quality NO2 pixels before
 classifier training. The classifier still receives the original NO2 quality
 mask, so it can distinguish observations from filled values.
@@ -14,14 +14,16 @@ mask, so it can distinguish observations from filled values.
 | Observation sequence | Five frames at `24 x 24` pixels |
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
-| Sample context | Midpoint solar-hour sine/cosine and day-of-year sine/cosine |
+| Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
 | Loss | Unweighted three-class cross-entropy |
 | Selection | Lowest validation cross-entropy for each model |
-| Primary result | Context-conditioned two-branch transport classifier |
+| Primary result | Context-aware vision classifier |
 
-The loader computes context at the midpoint between the first and fifth TEMPO
-scans. It converts UTC to local solar time with longitude and normalizes the
-four cyclic features with training-split statistics.
+The seasonal baseline uses context at the midpoint between the first and fifth
+TEMPO scans. The vision model uses context at all five observation timestamps.
+It converts UTC to local solar time with longitude, rounds vision-model hours
+to the nearest whole hour, and normalizes the four cyclic features with
+training-split statistics.
 
 ## Raster completion and quality
 
@@ -60,15 +62,17 @@ The training job fits these models:
 - `vision`: the context-aware observation and transport-residual classifier.
 
 The observation branch processes five frames. The residual branch processes
-four transitions. The first observation initializes the temporal state. Each
-later observation is aligned with the residual ending at that timestep, and
-the paired spatial bottlenecks are fused before a shared ConvGRU aggregates
-the four transitions and produces one visual embedding.
+four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
+sine/cosine at each observation timestamp. The resulting embedding is
+broadcast across the spatial feature map. A `1 x 1` projection concatenates
+the first observation with its context to initialize the temporal state,
+without creating a synthetic residual. Each later projection concatenates the
+observation, aligned residual, and that timestep's context before a shared
+ConvGRU update.
 
-The vision model sends the four-value context vector through a small MLP once
-per sample. It concatenates that context embedding with the visual embedding
-before classification. Training drops context for a random share of samples.
-The job also saves predictions and metrics from shuffled-context inference.
+This is direct feature concatenation rather than scale or shift modulation.
+Training drops the full context sequence for a random share of samples. The
+job also saves predictions and metrics from shuffled-context inference.
 
 ## Optimization
 

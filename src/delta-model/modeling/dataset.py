@@ -126,9 +126,8 @@ def midpoint_local_solar_hour(frame: pd.DataFrame) -> pd.Series:
     )
 
 
-def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
-    # Derive daily and annual phase from the sample midpoint
-    solar_time = _midpoint_local_time(frame)
+def _cyclic_feature_matrix(solar_time: pd.Series) -> np.ndarray:
+    # Encode one local-solar timestamp as daily and annual phase
     seconds = (
         solar_time.dt.hour * 3_600
         + solar_time.dt.minute * 60
@@ -147,6 +146,23 @@ def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
             np.cos(annual_angle),
         )
     )
+
+
+def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
+    # Preserve midpoint context for the seasonal-only baseline
+    return _cyclic_feature_matrix(_midpoint_local_time(frame))
+
+
+def _timestep_feature_matrix(frame: pd.DataFrame) -> np.ndarray:
+    # Round each observation's local solar time before cyclic encoding
+    longitude = pd.to_numeric(frame["lon"], errors="coerce")
+    solar_offset = pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
+    timestep_features = []
+    for column in TIMESTEP_TIME_COLUMNS:
+        utc_time = pd.to_datetime(frame[column], errors="coerce", utc=True)
+        rounded_solar_time = (utc_time + solar_offset + pd.Timedelta(minutes=30)).dt.floor("h")
+        timestep_features.append(_cyclic_feature_matrix(rounded_solar_time))
+    return np.stack(timestep_features, axis=1)
 
 
 def _raster_path(serialized_path: object, dataset_dir: Path) -> Path:
@@ -417,12 +433,14 @@ class NOxDataset(Dataset):
         completed_raster_path: str | Path | None = None,
         aoi_normalize_no2: bool = True,
         transport_transform: AdvectionTransform | None = None,
+        per_timestep_context: bool = False,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
         self.aoi_normalize_no2 = aoi_normalize_no2
         self.transport_transform = transport_transform
+        self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
@@ -436,7 +454,11 @@ class NOxDataset(Dataset):
             dtype=np.float32,
         )
 
-        raw_features = _feature_matrix(self.frame)
+        raw_features = (
+            _timestep_feature_matrix(self.frame)
+            if self.per_timestep_context
+            else _feature_matrix(self.frame)
+        )
         feature_mean = np.asarray(self.stats.feature_mean, dtype=np.float64)
         feature_std = np.asarray(self.stats.feature_std, dtype=np.float64)
         self.features = ((raw_features - feature_mean) / feature_std).astype(np.float32)

@@ -85,7 +85,7 @@ class BranchFrameEncoder(nn.Module):
 
 
 class VisionClassifier(nn.Module):
-    """Classify change from visual and sample-context embeddings."""
+    """Classify change from visual inputs with context at every timestep."""
 
     def __init__(
         self,
@@ -100,8 +100,24 @@ class VisionClassifier(nn.Module):
         self.context_dropout = context_dropout
         self.observation_encoder = BranchFrameEncoder(5, model_width)
         self.residual_encoder = BranchFrameEncoder(2, model_width)
-        self.branch_fusion = nn.Sequential(
-            nn.Conv2d(2 * model_width, model_width, kernel_size=1, bias=False),
+        self.context_encoder = build_seasonal_encoder(n_features)
+        self.initial_fusion = nn.Sequential(
+            nn.Conv2d(
+                model_width + SEASONAL_EMBEDDING_DIM,
+                model_width,
+                kernel_size=1,
+                bias=False,
+            ),
+            _group_norm(model_width),
+            nn.SiLU(inplace=True),
+        )
+        self.transition_fusion = nn.Sequential(
+            nn.Conv2d(
+                2 * model_width + SEASONAL_EMBEDDING_DIM,
+                model_width,
+                kernel_size=1,
+                bias=False,
+            ),
             _group_norm(model_width),
             nn.SiLU(inplace=True),
         )
@@ -112,9 +128,8 @@ class VisionClassifier(nn.Module):
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
         )
-        self.context_encoder = build_seasonal_encoder(n_features)
         self.classifier = nn.Sequential(
-            nn.Linear(model_width + SEASONAL_EMBEDDING_DIM, head_dim),
+            nn.Linear(model_width, head_dim),
             nn.LayerNorm(head_dim),
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
@@ -152,27 +167,47 @@ class VisionClassifier(nn.Module):
         self,
         observation: torch.Tensor,
         residual: torch.Tensor,
+        context: torch.Tensor,
     ) -> torch.Tensor:
-        # Initialize from the first observation then aggregate four aligned transitions
+        # Fuse real inputs at each timestamp without synthesizing an initial residual
         if observation.shape[1] != residual.shape[1] + 1:
             raise ValueError(
                 "Expected one more observation timestep than transport-residual timesteps, "
                 f"received {observation.shape[1]} and {residual.shape[1]}"
             )
-        hidden = observation[:, 0]
+        if observation.shape[:2] != context.shape[:2]:
+            raise ValueError(
+                "Expected one context vector per observation timestep, "
+                f"received {observation.shape[:2]} and {context.shape[:2]}"
+            )
+        spatial_context = context[:, :, :, None, None].expand(
+            -1,
+            -1,
+            -1,
+            observation.shape[-2],
+            observation.shape[-1],
+        )
+        hidden = self.initial_fusion(torch.cat((observation[:, 0], spatial_context[:, 0]), dim=1))
         for transition in range(residual.shape[1]):
-            aligned = torch.cat((observation[:, transition + 1], residual[:, transition]), dim=1)
-            hidden = self.temporal_encoder(self.branch_fusion(aligned), hidden)
+            aligned = torch.cat(
+                (
+                    observation[:, transition + 1],
+                    residual[:, transition],
+                    spatial_context[:, transition + 1],
+                ),
+                dim=1,
+            )
+            hidden = self.temporal_encoder(self.transition_fusion(aligned), hidden)
         average = F.adaptive_avg_pool2d(hidden, 1).flatten(1)
         peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
         return self.temporal_projection(torch.cat((average, peak), dim=1))
 
     def _encode_context(self, context: torch.Tensor) -> torch.Tensor:
-        # Encode context once and drop it by sample during training
+        # Keep dropout consistent across every timestep in a sample
         embedding = self.context_encoder(context)
         if self.training and self.context_dropout > 0.0:
             keep = (
-                torch.rand(context.shape[0], 1, device=context.device) >= self.context_dropout
+                torch.rand(context.shape[0], 1, 1, device=context.device) >= self.context_dropout
             ).to(context.dtype)
             embedding = embedding * keep
         return embedding
@@ -191,9 +226,13 @@ class VisionClassifier(nn.Module):
             self.residual_encoder,
             transport,
         )
-        vision_embedding = self._aggregate_aligned(observation_features, residual_features)
         context_embedding = self._encode_context(seasonal)
-        return self.classifier(torch.cat((vision_embedding, context_embedding), dim=1))
+        vision_embedding = self._aggregate_aligned(
+            observation_features,
+            residual_features,
+            context_embedding,
+        )
+        return self.classifier(vision_embedding)
 
     def num_params(self) -> int:
         """Count trainable model parameters."""

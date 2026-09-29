@@ -484,6 +484,7 @@ def main() -> None:
             stats,
             completed_raster_path=completed_paths[split],
             transport_transform=transport_transform,
+            per_timestep_context=True,
         )
         for split in datasets
     }
@@ -558,8 +559,8 @@ def main() -> None:
         checkpoint_path=checkpoint_dir / "best_vision_classifier.pt",
         checkpoint_metadata={
             **common_checkpoint_metadata,
-            "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-            "context_fusion": "post_temporal_embedding_concatenation",
+            "visual_fusion": "aligned_observation_transport_context_fusion",
+            "context_fusion": "encoded_spatial_channel_concatenation_per_timestep",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
             "model_width": args.model_width,
             "encoder_initialization": "random",
@@ -596,8 +597,8 @@ def main() -> None:
         "best_validation_loss": vision_best_loss,
         "encoder_initialization": "random",
         "loss": "unweighted_hard_cross_entropy",
-        "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-        "context_fusion": "post_temporal_embedding_concatenation",
+        "visual_fusion": "aligned_observation_transport_context_fusion",
+        "context_fusion": "encoded_spatial_channel_concatenation_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
     }
     del vision_model, vision_train_loader
@@ -647,6 +648,7 @@ def main() -> None:
         "class_counts": {split: _class_counts(dataset) for split, dataset in datasets.items()},
         "seasonal_features": list(MODEL_FEATURE_NAMES),
         "seasonal_feature_timestamp": "sequence_midpoint_local_solar_time",
+        "vision_context_timestamps": "each_observation_local_solar_time_rounded_to_nearest_hour",
         "prediction_family": "three_class_categorical_distribution",
         "transport": {
             "execution": "cpu_dataloader_transform",
@@ -659,8 +661,10 @@ def main() -> None:
             "residual_normalization": transport_residual_stats,
         },
         "context_fusion": {
-            "location": "post_temporal_embedding",
-            "method": "embedding_concatenation",
+            "location": "before_initialization_and_each_convgru_update",
+            "method": "encoded_spatial_channel_concatenation",
+            "initial_timestep_context": True,
+            "scale_or_shift_modulation": False,
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
         },
     }
