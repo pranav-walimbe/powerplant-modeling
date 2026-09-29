@@ -1,9 +1,8 @@
-"""Differentiable GPU transport for NO2 transition residuals."""
+"""CPU transport transform for NO2 transition residuals."""
 
 from __future__ import annotations
 
 import torch
-from torch import nn
 from torch.nn import functional as F
 
 from config import IMG_RANGE, MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_KEYS, MODEL_MASK_KEYS
@@ -13,8 +12,8 @@ METRES_PER_KM = 1_000.0
 MIN_NORMALIZATION_SCALE = 1e-12
 
 
-class AdvectionTransport(nn.Module):
-    """Build four physical transition residuals from five raster observations."""
+class AdvectionTransform:
+    """Build four transport residuals from five CPU raster observations."""
 
     def __init__(
         self,
@@ -25,19 +24,17 @@ class AdvectionTransport(nn.Module):
         residual_scale: float = 1.0,
         decay_lifetime_hours: float | None = None,
     ) -> None:
-        super().__init__()
         self.no2_channel = MODEL_IMAGE_KEYS.index("no2")
         self.wind_u_channel = MODEL_IMAGE_KEYS.index("wind_u_80m_mps")
         self.wind_v_channel = MODEL_IMAGE_KEYS.index("wind_v_80m_mps")
         self.quality_channel = len(MODEL_IMAGE_KEYS) + MODEL_MASK_KEYS.index("no2_mask")
-        self.register_buffer("wind_u_center", torch.tensor(float(image_center[self.wind_u_channel])))
-        self.register_buffer("wind_u_scale", torch.tensor(float(image_scale[self.wind_u_channel])))
-        self.register_buffer("wind_v_center", torch.tensor(float(image_center[self.wind_v_channel])))
-        self.register_buffer("wind_v_scale", torch.tensor(float(image_scale[self.wind_v_channel])))
-        self.register_buffer("residual_center", torch.tensor(float(residual_center)))
-        self.register_buffer("residual_scale", torch.tensor(max(float(residual_scale), MIN_NORMALIZATION_SCALE)))
-        lifetime = float("nan") if decay_lifetime_hours is None else float(decay_lifetime_hours)
-        self.register_buffer("decay_lifetime_hours", torch.tensor(lifetime))
+        self.wind_u_center = float(image_center[self.wind_u_channel])
+        self.wind_u_scale = float(image_scale[self.wind_u_channel])
+        self.wind_v_center = float(image_center[self.wind_v_channel])
+        self.wind_v_scale = float(image_scale[self.wind_v_channel])
+        self.residual_center = float(residual_center)
+        self.residual_scale = max(float(residual_scale), MIN_NORMALIZATION_SCALE)
+        self.decay_lifetime_hours = decay_lifetime_hours
 
     @staticmethod
     def _base_grid(height: int, width: int, reference: torch.Tensor) -> torch.Tensor:
@@ -92,6 +89,11 @@ class AdvectionTransport(nn.Module):
         Returns:
             Physical residual and quality tensors with four timesteps.
         """
+        inputs = (image, elapsed_hours, no2_normalization)
+        if any(value.device.type != "cpu" for value in inputs):
+            raise ValueError("AdvectionTransform requires CPU tensors")
+        if transport_wind_mps is not None and transport_wind_mps.device.type != "cpu":
+            raise ValueError("AdvectionTransform requires CPU transport wind tensors")
         batch_size, timesteps, _, height, width = image.shape
         no2_center = no2_normalization[:, 0, None, None, None]
         no2_scale = no2_normalization[:, 1, None, None, None]
@@ -115,7 +117,7 @@ class AdvectionTransport(nn.Module):
             padding_mode="border",
             align_corners=False,
         )
-        if torch.isfinite(self.decay_lifetime_hours):
+        if self.decay_lifetime_hours is not None:
             decay = torch.exp(-interval_hours[:, None, None, None] / self.decay_lifetime_hours)
             transported = decay * transported
 
@@ -133,7 +135,7 @@ class AdvectionTransport(nn.Module):
         residual = (current - transported).reshape(batch_size, timesteps - 1, 1, height, width)
         return residual, residual_quality.reshape_as(residual)
 
-    def forward(
+    def __call__(
         self,
         image: torch.Tensor,
         elapsed_hours: torch.Tensor,

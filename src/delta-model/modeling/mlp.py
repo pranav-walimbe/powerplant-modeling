@@ -38,11 +38,10 @@ class SeasonalMLP(nn.Module):
         self,
         image: torch.Tensor,
         seasonal: torch.Tensor,
-        elapsed_hours: torch.Tensor | None = None,
-        no2_normalization: torch.Tensor | None = None,
+        transport: torch.Tensor,
     ) -> torch.Tensor:
         """Predict one logit for each emissions-change class."""
-        del image, elapsed_hours, no2_normalization
+        del image, transport
         return self.classifier(self.encode(seasonal))
 
     def num_params(self) -> int:

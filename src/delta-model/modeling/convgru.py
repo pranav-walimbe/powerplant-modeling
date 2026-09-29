@@ -2,7 +2,6 @@
 
 import torch
 from modeling.mlp import SEASONAL_EMBEDDING_DIM, SeasonalMLP
-from modeling.transport import AdvectionTransport
 from torch import nn
 from torch.nn import functional as F
 
@@ -235,10 +234,9 @@ class RasterConvGRUClassifier(nn.Module):
         self,
         image: torch.Tensor,
         seasonal: torch.Tensor,
-        elapsed_hours: torch.Tensor,
-        no2_normalization: torch.Tensor,
+        transport: torch.Tensor,
     ) -> torch.Tensor:
-        del seasonal, elapsed_hours, no2_normalization
+        del seasonal, transport
         return self.classifier(self._encode_sequence(image))
 
     def num_params(self) -> int:
@@ -270,10 +268,9 @@ class LearnedEmbeddingFusionClassifier(RasterConvGRUClassifier):
         self,
         image: torch.Tensor,
         seasonal: torch.Tensor,
-        elapsed_hours: torch.Tensor,
-        no2_normalization: torch.Tensor,
+        transport: torch.Tensor,
     ) -> torch.Tensor:
-        del elapsed_hours, no2_normalization
+        del transport
         vision_embedding = self._encode_sequence(image)
         seasonal_embedding = self.seasonal_encoder(seasonal)
         return self.classifier(torch.cat((vision_embedding, seasonal_embedding), dim=1))
@@ -285,25 +282,13 @@ class TransportContextClassifier(nn.Module):
     def __init__(
         self,
         n_features: int,
-        image_center: tuple[float, ...],
-        image_scale: tuple[float, ...],
-        residual_center: float,
-        residual_scale: float,
         *,
         condition_on_context: bool,
         model_width: int = DEFAULT_MODEL_WIDTH,
         head_dim: int = DEFAULT_HEAD_DIM,
         dropout: float = DEFAULT_DROPOUT,
-        decay_lifetime_hours: float | None = None,
     ) -> None:
         super().__init__()
-        self.transport = AdvectionTransport(
-            image_center,
-            image_scale,
-            residual_center=residual_center,
-            residual_scale=residual_scale,
-            decay_lifetime_hours=decay_lifetime_hours,
-        )
         self.observation_encoder = BranchFrameEncoder(5, model_width)
         self.residual_encoder = BranchFrameEncoder(2, model_width)
         self.branch_fusion = nn.Sequential(
@@ -383,16 +368,8 @@ class TransportContextClassifier(nn.Module):
         self,
         image: torch.Tensor,
         seasonal: torch.Tensor,
-        elapsed_hours: torch.Tensor,
-        no2_normalization: torch.Tensor,
-        transport_wind_mps: torch.Tensor | None = None,
+        transport: torch.Tensor,
     ) -> torch.Tensor:
-        residual, residual_quality = self.transport(
-            image,
-            elapsed_hours,
-            no2_normalization,
-            transport_wind_mps=transport_wind_mps,
-        )
         observation_delta = None
         residual_delta = None
         if self.context_conditioner is not None:
@@ -404,7 +381,7 @@ class TransportContextClassifier(nn.Module):
         )
         residual_features = self._encode_frames(
             self.residual_encoder,
-            torch.cat((residual, residual_quality), dim=2),
+            transport,
             residual_delta,
         )
         return self.classifier(self._aggregate_aligned(observation_features, residual_features))

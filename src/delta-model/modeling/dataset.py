@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from modeling.transport import AdvectionTransform
 from torch.utils.data import Dataset
 
 from config import (
@@ -415,11 +416,13 @@ class NOxDataset(Dataset):
         load_images: bool = True,
         completed_raster_path: str | Path | None = None,
         aoi_normalize_no2: bool = True,
+        transport_transform: AdvectionTransform | None = None,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
         self.aoi_normalize_no2 = aoi_normalize_no2
+        self.transport_transform = transport_transform
         self._completed_rasters: np.ndarray | None = None
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
@@ -486,11 +489,20 @@ class NOxDataset(Dataset):
                 image = torch.from_numpy(np.concatenate((normalized, masks), axis=1))
         else:
             image = torch.empty(0, dtype=torch.float32)
+        transport = torch.empty(0, dtype=torch.float32)
+        if self.transport_transform is not None:
+            elapsed_hours = torch.from_numpy(self.elapsed_hours[index]).unsqueeze(0)
+            no2_normalization = torch.from_numpy(self.no2_normalization[index]).unsqueeze(0)
+            residual, quality = self.transport_transform(
+                image.unsqueeze(0),
+                elapsed_hours,
+                no2_normalization,
+            )
+            transport = torch.cat((residual, quality), dim=2).squeeze(0)
         return (
             image,
             torch.from_numpy(self.features[index]),
-            torch.from_numpy(self.elapsed_hours[index]),
-            torch.from_numpy(self.no2_normalization[index]),
+            transport,
             torch.tensor(self.labels[index]),
             index,
         )

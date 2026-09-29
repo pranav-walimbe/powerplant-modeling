@@ -37,7 +37,7 @@ from modeling.eval_utils import (
 )
 from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
-from modeling.transport import AdvectionTransport
+from modeling.transport import AdvectionTransform
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -119,13 +119,12 @@ def _seed_everything(seed: int) -> None:
 
 def _move_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[torch.Tensor, ...]:
     # Move model inputs and class labels onto the training device
-    image, seasonal, elapsed_hours, no2_normalization, target, index = batch
+    image, seasonal, transport, target, index = batch
     non_blocking = device.type == "cuda"
     return (
         image.to(device, non_blocking=non_blocking),
         seasonal.to(device, non_blocking=non_blocking),
-        elapsed_hours.to(device, non_blocking=non_blocking),
-        no2_normalization.to(device, non_blocking=non_blocking),
+        transport.to(device, non_blocking=non_blocking),
         target.to(device, non_blocking=non_blocking),
         index,
     )
@@ -146,10 +145,10 @@ def train_epoch(
     correct = 0
     amp_enabled = device.type == "cuda"
     for batch in loader:
-        image, seasonal, elapsed_hours, no2_normalization, target, _ = _move_batch(batch, device)
+        image, seasonal, transport, target, _ = _move_batch(batch, device)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=amp_enabled):
-            logits = model(image, seasonal, elapsed_hours, no2_normalization)
+            logits = model(image, seasonal, transport)
             loss = criterion(logits, target)
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -174,9 +173,9 @@ def val_epoch(
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
         for batch in loader:
-            image, seasonal, elapsed_hours, no2_normalization, target, _ = _move_batch(batch, device)
+            image, seasonal, transport, target, _ = _move_batch(batch, device)
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                logits = model(image, seasonal, elapsed_hours, no2_normalization)
+                logits = model(image, seasonal, transport)
                 loss = criterion(logits, target)
             total_loss += loss.item() * target.numel()
             correct += int((logits.argmax(dim=1) == target).sum().item())
@@ -293,7 +292,7 @@ def _fill_missing_rasters(
             destination = None
             loader = _loader(dataset, shuffle=False, args=args, device=device)
             for batch_number, batch in enumerate(loader, start=1):
-                image, _, _, _, _, indices = _move_batch(batch, device)
+                image, _, _, _, indices = _move_batch(batch, device)
                 batch_size, timesteps, channels, height, width = image.shape
                 frames = image.reshape(batch_size * timesteps, channels, height, width)
                 with torch.autocast(device_type=device.type, enabled=amp_enabled):
@@ -329,16 +328,18 @@ def _fill_missing_rasters(
 def _fit_transport_residual_stats(
     loader: DataLoader,
     stats: NormalizationStats,
-    device: torch.device,
 ) -> dict[str, float]:
     # Fit quality-weighted physical residual moments on the training split
-    transport = AdvectionTransport(stats.image_center, stats.image_scale).to(device)
+    transport = AdvectionTransform(stats.image_center, stats.image_scale)
     total_weight = 0.0
     weighted_sum = 0.0
     weighted_square_sum = 0.0
     with torch.inference_mode():
         for batch_number, batch in enumerate(loader, start=1):
-            image, _, elapsed_hours, no2_normalization, _, _ = _move_batch(batch, device)
+            image, _, _, _, indices = batch
+            source_indices = indices.numpy()
+            elapsed_hours = torch.from_numpy(loader.dataset.elapsed_hours[source_indices])
+            no2_normalization = torch.from_numpy(loader.dataset.no2_normalization[source_indices])
             residual, quality = transport.physical_residual(image, elapsed_hours, no2_normalization)
             weights = quality.double()
             residual = residual.double()
@@ -371,7 +372,7 @@ def run_inference(
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
         for batch in loader:
-            image, seasonal, elapsed_hours, no2_normalization, _, index = _move_batch(batch, device)
+            image, seasonal, transport, _, index = _move_batch(batch, device)
             if context_permutation is not None:
                 source_indices = context_permutation[index.numpy()]
                 seasonal = torch.from_numpy(loader.dataset.features[source_indices]).to(
@@ -379,7 +380,7 @@ def run_inference(
                     non_blocking=device.type == "cuda",
                 )
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                logits = model(image, seasonal, elapsed_hours, no2_normalization)
+                logits = model(image, seasonal, transport)
             logits = logits.float()
             logits_batches.append(logits.cpu().numpy())
             probability_batches.append(logits.softmax(dim=1).cpu().numpy())
@@ -465,11 +466,37 @@ def main() -> None:
         split: NOxDataset(split, stats, completed_raster_path=completed_paths[split])
         for split in ("train", "val", "test")
     }
+    transport_stats_loader = _loader(
+        datasets["train"],
+        shuffle=False,
+        args=args,
+        device=torch.device("cpu"),
+    )
+    transport_residual_stats = _fit_transport_residual_stats(transport_stats_loader, stats)
+    del transport_stats_loader
+    transport_transform = AdvectionTransform(
+        stats.image_center,
+        stats.image_scale,
+        residual_center=transport_residual_stats["center"],
+        residual_scale=transport_residual_stats["scale"],
+    )
+    transport_datasets = {
+        split: NOxDataset(
+            split,
+            stats,
+            completed_raster_path=completed_paths[split],
+            transport_transform=transport_transform,
+        )
+        for split in datasets
+    }
     seasonal_datasets = {split: NOxDataset(split, stats, load_images=False) for split in datasets}
     eval_loaders = {
         split: _loader(dataset, shuffle=False, args=args, device=device) for split, dataset in datasets.items()
     }
-    transport_residual_stats = _fit_transport_residual_stats(eval_loaders["train"], stats, device)
+    transport_eval_loaders = {
+        split: _loader(dataset, shuffle=False, args=args, device=device)
+        for split, dataset in transport_datasets.items()
+    }
     seasonal_train_loader = _loader(seasonal_datasets["train"], shuffle=True, args=args, device=device)
     seasonal_eval_loaders = {
         split: _loader(dataset, shuffle=False, args=args, device=device) for split, dataset in seasonal_datasets.items()
@@ -530,16 +557,13 @@ def main() -> None:
                 "fusion": "joint_raster_and_seasonal_embedding_concatenation",
                 "seasonal_encoder_training": "joint_end_to_end",
             },
+            False,
         ),
         (
             "transport_image_only",
             "Transport image-only classifier",
             lambda: TransportContextClassifier(
                 len(MODEL_FEATURE_NAMES),
-                stats.image_center,
-                stats.image_scale,
-                transport_residual_stats["center"],
-                transport_residual_stats["scale"],
                 condition_on_context=False,
                 model_width=args.model_width,
                 head_dim=args.head_dim,
@@ -549,16 +573,13 @@ def main() -> None:
                 "fusion": "aligned_observation_and_transport_bottleneck_fusion",
                 "context_conditioning": "none",
             },
+            True,
         ),
         (
             "transport_context",
             "Transport context-conditioned classifier",
             lambda: TransportContextClassifier(
                 len(MODEL_FEATURE_NAMES),
-                stats.image_center,
-                stats.image_scale,
-                transport_residual_stats["center"],
-                transport_residual_stats["scale"],
                 condition_on_context=True,
                 model_width=args.model_width,
                 head_dim=args.head_dim,
@@ -569,18 +590,21 @@ def main() -> None:
                 "context_conditioning": "bounded_scale_only_bottleneck_residual",
                 "context_direct_to_classifier": False,
             },
+            True,
         ),
     )
     shuffled_context_frames: dict[str, pd.DataFrame] = {}
-    for model_name, phase_name, factory, model_metadata in model_factories:
+    for model_name, phase_name, factory, model_metadata, uses_transport in model_factories:
         _seed_everything(args.seed)
         model = factory().to(device)
-        train_loader = _loader(datasets["train"], shuffle=True, args=args, device=device)
+        active_datasets = transport_datasets if uses_transport else datasets
+        active_eval_loaders = transport_eval_loaders if uses_transport else eval_loaders
+        train_loader = _loader(active_datasets["train"], shuffle=True, args=args, device=device)
         print(f"Training {model.num_params():,}-parameter {phase_name.lower()}")
         train_losses, validation_losses, best_loss = fit_model(
             model,
             train_loader,
-            eval_loaders["val"],
+            active_eval_loaders["val"],
             device=device,
             epochs=args.epochs,
             learning_rate=args.learning_rate,
@@ -597,11 +621,11 @@ def main() -> None:
             phase_name=phase_name,
         )
         split_frames = {}
-        for split, loader in eval_loaders.items():
+        for split, loader in active_eval_loaders.items():
             logits, probabilities, indices = run_inference(model, loader, device)
-            split_frames[split] = _prediction_frame(datasets[split], logits, probabilities, indices)
+            split_frames[split] = _prediction_frame(active_datasets[split], logits, probabilities, indices)
             if model_name == "transport_context":
-                permutation = np.random.default_rng(args.seed).permutation(len(datasets[split]))
+                permutation = np.random.default_rng(args.seed).permutation(len(active_datasets[split]))
                 shuffled_logits, shuffled_probabilities, shuffled_indices = run_inference(
                     model,
                     loader,
@@ -609,7 +633,7 @@ def main() -> None:
                     context_permutation=permutation,
                 )
                 shuffled_context_frames[split] = _prediction_frame(
-                    datasets[split],
+                    active_datasets[split],
                     shuffled_logits,
                     shuffled_probabilities,
                     shuffled_indices,
@@ -675,6 +699,7 @@ def main() -> None:
         "seasonal_feature_timestamp": "sequence_midpoint_local_solar_time",
         "prediction_family": "three_class_categorical_distribution",
         "transport": {
+            "execution": "cpu_dataloader_transform",
             "method": "backward_semi_lagrangian_bilinear",
             "wind": "interval_mean_80m_wind",
             "residual": "current_minus_advected_prior",

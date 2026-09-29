@@ -37,10 +37,11 @@ wind. Training fits all normalization state on the training split.
 
 ## Transport residuals
 
-The GPU transport operator converts normalized NO2 back to physical units. For
-each of four intervals, it averages endpoint 80-meter winds and performs
-backward semi-Lagrangian warping with bilinear interpolation. It subtracts the
-transported previous observation from the current observation.
+The data-loader's CPU transport transform converts normalized NO2 back to
+physical units. For each of four intervals, it averages endpoint 80-meter
+winds and performs backward semi-Lagrangian warping with bilinear
+interpolation. It subtracts the transported previous observation from the
+current observation before the batch is transferred to the GPU.
 
 Residual quality equals current NO2 quality multiplied by warped source NO2
 quality. Backtraces outside the raster receive zero quality while the residual
