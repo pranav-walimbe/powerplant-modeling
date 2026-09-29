@@ -98,11 +98,36 @@ def _read_split_frame(split: str, dataframe_dir: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
-    # Derive daily and annual phase from the label-aligned final scan
-    utc_time = pd.to_datetime(frame[FINAL_TIMESTEP_TIME_COLUMN], errors="coerce", utc=True)
+def _midpoint_local_time(frame: pd.DataFrame) -> pd.Series:
+    # Locate the sample midpoint and convert it from UTC to local solar time
+    start = pd.to_datetime(frame[TIMESTEP_TIME_COLUMNS[0]], errors="coerce", utc=True)
+    end = pd.to_datetime(frame[TIMESTEP_TIME_COLUMNS[-1]], errors="coerce", utc=True)
+    utc_time = start + (end - start) / 2
     longitude = pd.to_numeric(frame["lon"], errors="coerce")
-    solar_time = utc_time + pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
+    return utc_time + pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
+
+
+def midpoint_local_solar_hour(frame: pd.DataFrame) -> pd.Series:
+    """Calculate fractional local solar hour at each sample midpoint.
+
+    Args:
+        frame: Records containing sequence timestamps and longitude.
+
+    Returns:
+        Fractional hours in the range from zero through twenty-four.
+    """
+    solar_time = _midpoint_local_time(frame)
+    return (
+        solar_time.dt.hour
+        + solar_time.dt.minute / 60.0
+        + solar_time.dt.second / 3_600.0
+        + solar_time.dt.microsecond / 3_600_000_000.0
+    )
+
+
+def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
+    # Derive daily and annual phase from the sample midpoint
+    solar_time = _midpoint_local_time(frame)
     seconds = (
         solar_time.dt.hour * 3_600
         + solar_time.dt.minute * 60
@@ -399,6 +424,14 @@ class NOxDataset(Dataset):
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.aoi_ids = pd.to_numeric(self.frame["aoi_id"], errors="raise").to_numpy(dtype=np.int64)
+        no2_normalization = [
+            _image_normalization(self.stats, int(aoi_id), self.aoi_normalize_no2)
+            for aoi_id in self.aoi_ids
+        ]
+        self.no2_normalization = np.asarray(
+            [(center[NO2_CHANNEL], scale[NO2_CHANNEL]) for center, scale in no2_normalization],
+            dtype=np.float32,
+        )
 
         raw_features = _feature_matrix(self.frame)
         feature_mean = np.asarray(self.stats.feature_mean, dtype=np.float64)
@@ -422,7 +455,7 @@ class NOxDataset(Dataset):
     def __len__(self) -> int:
         return len(self.labels)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
         if self.load_images:
             if self.completed_raster_path is not None:
                 if self._completed_rasters is None:
@@ -457,6 +490,7 @@ class NOxDataset(Dataset):
             image,
             torch.from_numpy(self.features[index]),
             torch.from_numpy(self.elapsed_hours[index]),
+            torch.from_numpy(self.no2_normalization[index]),
             torch.tensor(self.labels[index]),
             index,
         )

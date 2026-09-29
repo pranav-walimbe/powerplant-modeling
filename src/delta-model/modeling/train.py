@@ -1,4 +1,4 @@
-"""Train seasonal and learned-fusion emissions-change classifiers."""
+"""Train seasonal, late-fusion, and transport emissions-change classifiers."""
 
 import argparse
 import hashlib
@@ -11,17 +11,22 @@ import numpy as np
 import pandas as pd
 import torch
 from modeling.convgru import (
+    DEFAULT_CONTEXT_DROPOUT,
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
     ENCODER_ARCHITECTURE_NAME,
     ENCODER_OUTPUT_CHANNELS,
+    MAX_CONTEXT_SCALE_DELTA,
+    TRANSPORT_ENCODER_ARCHITECTURE_NAME,
     LearnedEmbeddingFusionClassifier,
     RasterFrameEncoder,
     ResidualBlock,
+    TransportContextClassifier,
 )
 from modeling.dataset import (
     MODEL_FEATURE_NAMES,
+    NormalizationStats,
     NOxDataset,
     compute_stats,
     save_stats,
@@ -31,10 +36,12 @@ from modeling.eval_utils import (
     PREDICTED_CLASS_COL,
     PROBABILITY_COLUMNS,
     TRUE_CLASS_COL,
+    classification_metrics,
     save_results,
 )
 from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
+from modeling.transport import AdvectionTransport
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -42,9 +49,11 @@ from torch.utils.data import DataLoader
 from config import (
     DATASET_AOI_NORMALIZATION_STATS,
     MODEL_CLASS_NAMES,
+    MODEL_COMPLETED_KEYS,
     MODEL_IMAGE_CHANNELS,
     MODEL_IMAGE_CLIP_ABS,
     MODEL_IMAGE_KEYS,
+    MODEL_INPUT_CHANNELS,
     MODEL_TARGET_COL,
     NUM_CORES,
     PRETRAINED_MASKED_MODEL_WEIGHTS,
@@ -211,12 +220,13 @@ def _seed_everything(seed: int) -> None:
 
 def _move_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[torch.Tensor, ...]:
     # Move model inputs and class labels onto the training device
-    image, seasonal, elapsed_hours, target, index = batch
+    image, seasonal, elapsed_hours, no2_normalization, target, index = batch
     non_blocking = device.type == "cuda"
     return (
         image.to(device, non_blocking=non_blocking),
         seasonal.to(device, non_blocking=non_blocking),
         elapsed_hours.to(device, non_blocking=non_blocking),
+        no2_normalization.to(device, non_blocking=non_blocking),
         target.to(device, non_blocking=non_blocking),
         index,
     )
@@ -237,10 +247,10 @@ def train_epoch(
     correct = 0
     amp_enabled = device.type == "cuda"
     for batch in loader:
-        image, seasonal, elapsed_hours, target, _ = _move_batch(batch, device)
+        image, seasonal, elapsed_hours, no2_normalization, target, _ = _move_batch(batch, device)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=amp_enabled):
-            logits = model(image, seasonal, elapsed_hours)
+            logits = model(image, seasonal, elapsed_hours, no2_normalization)
             loss = criterion(logits, target)
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -265,9 +275,9 @@ def val_epoch(
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
         for batch in loader:
-            image, seasonal, elapsed_hours, target, _ = _move_batch(batch, device)
+            image, seasonal, elapsed_hours, no2_normalization, target, _ = _move_batch(batch, device)
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                logits = model(image, seasonal, elapsed_hours)
+                logits = model(image, seasonal, elapsed_hours, no2_normalization)
                 loss = criterion(logits, target)
             total_loss += loss.item() * target.numel()
             correct += int((logits.argmax(dim=1) == target).sum().item())
@@ -374,7 +384,7 @@ def _fill_missing_rasters(
     args: argparse.Namespace,
     device: torch.device,
 ) -> dict[str, Path]:
-    # Materialize normalized four-channel rasters before classifier training
+    # Materialize completed rasters and their original NO2 quality channel
     output_dir.mkdir(parents=True, exist_ok=False)
     paths: dict[str, Path] = {}
     amp_enabled = device.type == "cuda"
@@ -384,17 +394,17 @@ def _fill_missing_rasters(
             destination = None
             loader = _loader(dataset, shuffle=False, args=args, device=device)
             for batch_number, batch in enumerate(loader, start=1):
-                image, _, _, _, indices = _move_batch(batch, device)
+                image, _, _, _, _, indices = _move_batch(batch, device)
                 batch_size, timesteps, channels, height, width = image.shape
                 frames = image.reshape(batch_size * timesteps, channels, height, width)
                 with torch.autocast(device_type=device.type, enabled=amp_enabled):
                     completed_no2 = model.fill_missing(frames)
-                completed_frames = frames[:, :MODEL_IMAGE_CHANNELS].clone()
+                completed_frames = frames[:, :MODEL_INPUT_CHANNELS].clone()
                 completed_frames[:, :1] = completed_no2
                 completed = completed_frames.reshape(
                     batch_size,
                     timesteps,
-                    MODEL_IMAGE_CHANNELS,
+                    MODEL_INPUT_CHANNELS,
                     height,
                     width,
                 )
@@ -404,7 +414,7 @@ def _fill_missing_rasters(
                         destination_path,
                         mode="w+",
                         dtype=np.float32,
-                        shape=(len(dataset), timesteps, MODEL_IMAGE_CHANNELS, height, width),
+                        shape=(len(dataset), timesteps, MODEL_INPUT_CHANNELS, height, width),
                     )
                 destination[indices.numpy()] = completed
                 if batch_number % 100 == 0 or batch_number == len(loader):
@@ -417,10 +427,42 @@ def _fill_missing_rasters(
     return paths
 
 
+def _fit_transport_residual_stats(
+    loader: DataLoader,
+    stats: NormalizationStats,
+    device: torch.device,
+) -> dict[str, float]:
+    # Fit quality-weighted physical residual moments on the training split
+    transport = AdvectionTransport(stats.image_center, stats.image_scale).to(device)
+    total_weight = 0.0
+    weighted_sum = 0.0
+    weighted_square_sum = 0.0
+    with torch.inference_mode():
+        for batch_number, batch in enumerate(loader, start=1):
+            image, _, elapsed_hours, no2_normalization, _, _ = _move_batch(batch, device)
+            residual, quality = transport.physical_residual(image, elapsed_hours, no2_normalization)
+            weights = quality.double()
+            residual = residual.double()
+            total_weight += weights.sum().item()
+            weighted_sum += (weights * residual).sum().item()
+            weighted_square_sum += (weights * residual.square()).sum().item()
+            if batch_number % 100 == 0 or batch_number == len(loader):
+                print(f"Transport-statistics scan: {batch_number:,}/{len(loader):,} batches")
+    center = weighted_sum / total_weight
+    variance = max(weighted_square_sum / total_weight - center * center, 1e-12)
+    return {
+        "center": center,
+        "scale": variance**0.5,
+        "effective_pixel_weight": total_weight,
+    }
+
+
 def run_inference(
     model: nn.Module,
     loader: DataLoader,
     device: torch.device,
+    *,
+    context_permutation: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Generate logits and probabilities for one dataset split."""
     model.eval()
@@ -430,9 +472,15 @@ def run_inference(
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
         for batch in loader:
-            image, seasonal, elapsed_hours, _, index = _move_batch(batch, device)
+            image, seasonal, elapsed_hours, no2_normalization, _, index = _move_batch(batch, device)
+            if context_permutation is not None:
+                source_indices = context_permutation[index.numpy()]
+                seasonal = torch.from_numpy(loader.dataset.features[source_indices]).to(
+                    device,
+                    non_blocking=device.type == "cuda",
+                )
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                logits = model(image, seasonal, elapsed_hours)
+                logits = model(image, seasonal, elapsed_hours, no2_normalization)
             logits = logits.float()
             logits_batches.append(logits.cpu().numpy())
             probability_batches.append(logits.softmax(dim=1).cpu().numpy())
@@ -478,7 +526,7 @@ def _class_counts(dataset: NOxDataset) -> dict[str, int]:
 
 
 def main() -> None:
-    """Train and evaluate seasonal and learned-fusion classifiers."""
+    """Train and evaluate seasonal, late-fusion, and transport classifiers."""
     args = parse_args()
     _seed_everything(args.seed)
     device = _device(args.device)
@@ -493,7 +541,7 @@ def main() -> None:
     run_dir = Path(RUNS_DIR) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
-    print(f"Training seasonal and learned-fusion classifiers on {device}; outputs: {run_dir}")
+    print(f"Training seasonal, learned-fusion, and transport classifiers on {device}; outputs: {run_dir}")
 
     masked_model_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
     stats = compute_stats("train", fixed_image_stats=masked_model_checkpoint["normalization_stats"])
@@ -522,6 +570,7 @@ def main() -> None:
     eval_loaders = {
         split: _loader(dataset, shuffle=False, args=args, device=device) for split, dataset in datasets.items()
     }
+    transport_residual_stats = _fit_transport_residual_stats(eval_loaders["train"], stats, device)
     seasonal_train_loader = _loader(seasonal_datasets["train"], shuffle=True, args=args, device=device)
     seasonal_eval_loaders = {
         split: _loader(dataset, shuffle=False, args=args, device=device) for split, dataset in seasonal_datasets.items()
@@ -568,59 +617,126 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    _seed_everything(args.seed)
-    fusion_model = LearnedEmbeddingFusionClassifier(
-        len(MODEL_FEATURE_NAMES),
-        model_width=args.model_width,
-        head_dim=args.head_dim,
-        dropout=args.dropout,
-    ).to(device)
-    train_loader = _loader(datasets["train"], shuffle=True, args=args, device=device)
-    print(f"Training {fusion_model.num_params():,}-parameter learned-fusion classifier")
-    fusion_train_losses, fusion_val_losses, fusion_best_loss = fit_model(
-        fusion_model,
-        train_loader,
-        eval_loaders["val"],
-        device=device,
-        epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        args=args,
-        checkpoint_path=checkpoint_dir / "best_learned_fusion_classifier.pt",
-        checkpoint_metadata={
-            **common_checkpoint_metadata,
-            "encoder_architecture": ENCODER_ARCHITECTURE_NAME,
-            "model_width": args.model_width,
-            "encoder_initialization": "random",
-            "fusion": "joint_raster_and_seasonal_embedding_concatenation",
-            "seasonal_encoder_training": "joint_end_to_end",
-            "loss": "unweighted_hard_cross_entropy",
-        },
-        phase_name="Learned-fusion classifier",
+    model_factories = (
+        (
+            "learned_fusion",
+            "Learned-fusion classifier",
+            lambda: LearnedEmbeddingFusionClassifier(
+                len(MODEL_FEATURE_NAMES),
+                model_width=args.model_width,
+                head_dim=args.head_dim,
+                dropout=args.dropout,
+            ),
+            {
+                "encoder_architecture": ENCODER_ARCHITECTURE_NAME,
+                "fusion": "joint_raster_and_seasonal_embedding_concatenation",
+                "seasonal_encoder_training": "joint_end_to_end",
+            },
+        ),
+        (
+            "transport_image_only",
+            "Transport image-only classifier",
+            lambda: TransportContextClassifier(
+                len(MODEL_FEATURE_NAMES),
+                stats.image_center,
+                stats.image_scale,
+                transport_residual_stats["center"],
+                transport_residual_stats["scale"],
+                condition_on_context=False,
+                model_width=args.model_width,
+                head_dim=args.head_dim,
+                dropout=args.dropout,
+            ),
+            {
+                "encoder_architecture": TRANSPORT_ENCODER_ARCHITECTURE_NAME,
+                "fusion": "observation_and_transport_embedding_concatenation",
+                "context_conditioning": "none",
+            },
+        ),
+        (
+            "transport_context",
+            "Transport context-conditioned classifier",
+            lambda: TransportContextClassifier(
+                len(MODEL_FEATURE_NAMES),
+                stats.image_center,
+                stats.image_scale,
+                transport_residual_stats["center"],
+                transport_residual_stats["scale"],
+                condition_on_context=True,
+                model_width=args.model_width,
+                head_dim=args.head_dim,
+                dropout=args.dropout,
+            ),
+            {
+                "encoder_architecture": TRANSPORT_ENCODER_ARCHITECTURE_NAME,
+                "fusion": "observation_and_transport_embedding_concatenation",
+                "context_conditioning": "bounded_scale_only_bottleneck_residual",
+                "context_direct_to_classifier": False,
+            },
+        ),
     )
-    fusion_frames = {}
-    for split, loader in eval_loaders.items():
-        logits, probabilities, indices = run_inference(fusion_model, loader, device)
-        fusion_frames[split] = _prediction_frame(datasets[split], logits, probabilities, indices)
-    histories["learned_fusion"] = (fusion_train_losses, fusion_val_losses)
-    model_frames["learned_fusion"] = fusion_frames
-    training_summaries["learned_fusion"] = {
-        "maximum_epochs": args.epochs,
-        "learning_rate": args.learning_rate,
-        "parameters": fusion_model.num_params(),
-        "model_width": args.model_width,
-        "best_validation_loss": fusion_best_loss,
-        "encoder_initialization": "random",
-        "seasonal_encoder_training": "joint_end_to_end",
-        "fusion": "joint_raster_and_seasonal_embedding_concatenation",
-        "loss": "unweighted_hard_cross_entropy",
-    }
-    del fusion_model, train_loader
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
+    shuffled_context_frames: dict[str, pd.DataFrame] = {}
+    for model_name, phase_name, factory, model_metadata in model_factories:
+        _seed_everything(args.seed)
+        model = factory().to(device)
+        train_loader = _loader(datasets["train"], shuffle=True, args=args, device=device)
+        print(f"Training {model.num_params():,}-parameter {phase_name.lower()}")
+        train_losses, validation_losses, best_loss = fit_model(
+            model,
+            train_loader,
+            eval_loaders["val"],
+            device=device,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            args=args,
+            checkpoint_path=checkpoint_dir / f"best_{model_name}_classifier.pt",
+            checkpoint_metadata={
+                **common_checkpoint_metadata,
+                **model_metadata,
+                "model_width": args.model_width,
+                "encoder_initialization": "random",
+                "transport_residual_stats": transport_residual_stats,
+                "loss": "unweighted_hard_cross_entropy",
+            },
+            phase_name=phase_name,
+        )
+        split_frames = {}
+        for split, loader in eval_loaders.items():
+            logits, probabilities, indices = run_inference(model, loader, device)
+            split_frames[split] = _prediction_frame(datasets[split], logits, probabilities, indices)
+            if model_name == "transport_context":
+                permutation = np.random.default_rng(args.seed).permutation(len(datasets[split]))
+                shuffled_logits, shuffled_probabilities, shuffled_indices = run_inference(
+                    model,
+                    loader,
+                    device,
+                    context_permutation=permutation,
+                )
+                shuffled_context_frames[split] = _prediction_frame(
+                    datasets[split],
+                    shuffled_logits,
+                    shuffled_probabilities,
+                    shuffled_indices,
+                )
+        histories[model_name] = (train_losses, validation_losses)
+        model_frames[model_name] = split_frames
+        training_summaries[model_name] = {
+            "maximum_epochs": args.epochs,
+            "learning_rate": args.learning_rate,
+            "parameters": model.num_params(),
+            "model_width": args.model_width,
+            "best_validation_loss": best_loss,
+            "encoder_initialization": "random",
+            "loss": "unweighted_hard_cross_entropy",
+            **model_metadata,
+        }
+        del model, train_loader
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
     run_config = {
         "device": str(device),
-        "models": ["seasonal", "learned_fusion"],
+        "models": ["seasonal", "learned_fusion", "transport_image_only", "transport_context"],
         "loss": "unweighted_hard_cross_entropy",
         "batch_size": args.batch_size,
         "workers": args.workers,
@@ -644,10 +760,12 @@ def main() -> None:
         "pretrained_masked_model_weights": str(masked_checkpoint_path),
         "pretrained_masked_model_sha256": masked_checkpoint_sha256,
         "pretrained_masked_model_role": "missing_pixel_completion_only",
-        "encoder_architecture": ENCODER_ARCHITECTURE_NAME,
+        "encoder_architectures": [ENCODER_ARCHITECTURE_NAME, TRANSPORT_ENCODER_ARCHITECTURE_NAME],
         "encoder_initialization": "random",
         "completed_raster_paths": {split: str(path) for split, path in completed_paths.items()},
+        "completed_raster_keys": list(MODEL_COMPLETED_KEYS),
         "image_keys": list(stats.image_keys),
+        "quality_keys": ["no2_mask", "transport_residual_quality"],
         "image_center": list(stats.image_center),
         "image_scale": list(stats.image_scale),
         "no2_normalization": "aoi_specific_median_robust_scale",
@@ -659,18 +777,41 @@ def main() -> None:
         "sequence_timesteps": SEQUENCE_TIMESTEPS,
         "class_counts": {split: _class_counts(dataset) for split, dataset in datasets.items()},
         "seasonal_features": list(MODEL_FEATURE_NAMES),
+        "seasonal_feature_timestamp": "sequence_midpoint_local_solar_time",
         "prediction_family": "three_class_categorical_distribution",
-        "sequence_encoder": "completed_raster_frame_encoder_then_convgru",
-        "fusion": "joint_raster_and_seasonal_embedding_concatenation",
-        "seasonal_encoder_training": "joint_end_to_end",
+        "transport": {
+            "method": "backward_semi_lagrangian_bilinear",
+            "wind": "interval_mean_80m_wind",
+            "residual": "current_minus_advected_prior",
+            "decay_enabled": False,
+            "elevated_wind_enabled": False,
+            "residual_quality": "current_no2_quality_times_warped_source_no2_quality",
+            "residual_normalization": transport_residual_stats,
+        },
+        "context_conditioning": {
+            "location": "spatial_bottleneck",
+            "method": "bounded_scale_only_residual_modulation",
+            "identity_initialized": True,
+            "direct_classifier_path": False,
+            "context_dropout": DEFAULT_CONTEXT_DROPOUT,
+            "maximum_scale_delta": MAX_CONTEXT_SCALE_DELTA,
+        },
     }
     with (run_dir / "run_config.json").open("w") as destination:
         json.dump(run_config, destination, indent=2)
 
+    shuffled_context_results = {
+        split: classification_metrics(frame) for split, frame in shuffled_context_frames.items()
+    }
+    with (run_dir / "shuffled_context_results.json").open("w") as destination:
+        json.dump(shuffled_context_results, destination, indent=2)
+    for split, frame in shuffled_context_frames.items():
+        frame.to_csv(run_dir / f"transport_context_shuffled_{split}_predictions.csv", index=False)
+
     plot_split_class_accuracy(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
-    save_results(model_frames, run_dir, primary_model_name="learned_fusion")
+    save_results(model_frames, run_dir, primary_model_name="transport_context")
 
 
 if __name__ == "__main__":
