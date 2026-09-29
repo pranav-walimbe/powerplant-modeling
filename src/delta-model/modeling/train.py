@@ -10,18 +10,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from modeling.autoencoder import MaskedNO2Autoencoder
 from modeling.convgru import (
     DEFAULT_CONTEXT_DROPOUT,
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
-    ENCODER_ARCHITECTURE_NAME,
-    ENCODER_OUTPUT_CHANNELS,
     MAX_CONTEXT_SCALE_DELTA,
-    TRANSPORT_ENCODER_ARCHITECTURE_NAME,
     LearnedEmbeddingFusionClassifier,
-    RasterFrameEncoder,
-    ResidualBlock,
     TransportContextClassifier,
 )
 from modeling.dataset import (
@@ -43,13 +39,11 @@ from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
 from modeling.transport import AdvectionTransport
 from torch import nn
-from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from config import (
     DATASET_AOI_NORMALIZATION_STATS,
     MODEL_CLASS_NAMES,
-    MODEL_IMAGE_CHANNELS,
     MODEL_IMAGE_CLIP_ABS,
     MODEL_IMAGE_KEYS,
     MODEL_INPUT_CHANNELS,
@@ -74,101 +68,6 @@ DEFAULT_GRADIENT_CLIP_NORM = 5.0
 DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
-
-
-def _group_norm(channels: int) -> nn.GroupNorm:
-    # Match the normalization layout stored in masked-model checkpoints
-    groups = min(8, channels)
-    while channels % groups:
-        groups -= 1
-    return nn.GroupNorm(groups, channels)
-
-
-class _PartialConv2d(nn.Module):
-    # Recreate one partial convolution from the masked-model checkpoint
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int) -> None:
-        super().__init__()
-        self.padding = kernel_size // 2
-        self.kernel_area = kernel_size * kernel_size
-        self.convolution = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=self.padding,
-            bias=False,
-        )
-        self.bias = nn.Parameter(torch.zeros(out_channels))
-        self.register_buffer("mask_kernel", torch.ones(1, 1, kernel_size, kernel_size))
-
-    def forward(self, inputs: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self.convolution(inputs * mask)
-        with torch.no_grad():
-            support = F.conv2d(mask, self.mask_kernel, padding=self.padding)
-            next_mask = (support > 0).to(inputs.dtype)
-            scale = self.kernel_area / support.clamp_min(1.0)
-        features = (features * scale + self.bias[None, :, None, None]) * next_mask
-        return features, next_mask
-
-
-class _MaskedNO2Stem(nn.Module):
-    # Recreate the masked-model NO2 stem for the filling pass
-    def __init__(self, out_channels: int = 16) -> None:
-        super().__init__()
-        self.first = _PartialConv2d(1, out_channels, kernel_size=5)
-        self.first_norm = _group_norm(out_channels)
-        self.second = _PartialConv2d(out_channels, out_channels, kernel_size=3)
-        self.second_norm = _group_norm(out_channels)
-        self.activation = nn.SiLU()
-
-    def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        features, mask = self.first(values, mask)
-        features = self.activation(self.first_norm(features)) * mask
-        features, mask = self.second(features, mask)
-        return self.activation(self.second_norm(features)) * mask
-
-
-class _MaskedRasterFrameEncoder(RasterFrameEncoder):
-    # Reuse the common encoder layers with the checkpoint's partial-convolution stem
-    def __init__(self) -> None:
-        super().__init__()
-        self.no2_stem = _MaskedNO2Stem(out_channels=16)
-
-    def forward(
-        self,
-        no2: torch.Tensor,
-        weather: torch.Tensor,
-        visible_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        no2_features = self.no2_stem(no2, visible_mask)
-        weather_features = self.weather_stem(weather)
-        fused = self.stem_fusion(torch.cat((no2_features, weather_features), dim=1))
-        return self.spatial_encoder(fused)
-
-
-class _MaskedNO2Autoencoder(nn.Module):
-    # Rebuild the existing masked model so its checkpoint can fill delta rasters
-    def __init__(self) -> None:
-        super().__init__()
-        self.encoder = _MaskedRasterFrameEncoder()
-        self.bottleneck = ResidualBlock(ENCODER_OUTPUT_CHANNELS, ENCODER_OUTPUT_CHANNELS)
-        self.decoder_12 = ResidualBlock(ENCODER_OUTPUT_CHANNELS, 48)
-        self.decoder_24 = ResidualBlock(48, 32)
-        self.output = nn.Conv2d(32, 1, kernel_size=1)
-
-    def forward(self, image: torch.Tensor) -> torch.Tensor:
-        no2 = image[:, :1]
-        weather = image[:, 1:MODEL_IMAGE_CHANNELS]
-        visible_mask = image[:, MODEL_IMAGE_CHANNELS : MODEL_IMAGE_CHANNELS + 1]
-        latent = self.encoder(no2, weather, visible_mask)
-        decoded = self.bottleneck(latent)
-        decoded = F.interpolate(decoded, scale_factor=2, mode="bilinear", align_corners=False)
-        decoded = self.decoder_12(decoded)
-        decoded = F.interpolate(decoded, scale_factor=2, mode="bilinear", align_corners=False)
-        return self.output(self.decoder_24(decoded))
-
-    def fill_missing(self, image: torch.Tensor) -> torch.Tensor:
-        visible_mask = image[:, MODEL_IMAGE_CHANNELS : MODEL_IMAGE_CHANNELS + 1]
-        return image[:, :1] * visible_mask + self(image) * (1.0 - visible_mask)
 
 
 def parse_args() -> argparse.Namespace:
@@ -365,19 +264,19 @@ def _checkpoint_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_masked_checkpoint(path: Path, device: torch.device) -> tuple[dict[str, object], _MaskedNO2Autoencoder]:
+def _load_masked_checkpoint(path: Path, device: torch.device) -> tuple[dict[str, object], MaskedNO2Autoencoder]:
     # Load the reconstruction model used to fill missing NO2 pixels
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     if tuple(checkpoint["image_keys"]) != tuple(MODEL_IMAGE_KEYS):
         raise ValueError("Masked checkpoint image keys do not match delta raster channels")
-    model = _MaskedNO2Autoencoder().to(device)
+    model = MaskedNO2Autoencoder().to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     return checkpoint, model
 
 
 def _fill_missing_rasters(
-    model: _MaskedNO2Autoencoder,
+    model: MaskedNO2Autoencoder,
     datasets: dict[str, NOxDataset],
     *,
     output_dir: Path,
@@ -628,7 +527,6 @@ def main() -> None:
                 dropout=args.dropout,
             ),
             {
-                "encoder_architecture": ENCODER_ARCHITECTURE_NAME,
                 "fusion": "joint_raster_and_seasonal_embedding_concatenation",
                 "seasonal_encoder_training": "joint_end_to_end",
             },
@@ -648,7 +546,6 @@ def main() -> None:
                 dropout=args.dropout,
             ),
             {
-                "encoder_architecture": TRANSPORT_ENCODER_ARCHITECTURE_NAME,
                 "fusion": "observation_and_transport_embedding_concatenation",
                 "context_conditioning": "none",
             },
@@ -668,7 +565,6 @@ def main() -> None:
                 dropout=args.dropout,
             ),
             {
-                "encoder_architecture": TRANSPORT_ENCODER_ARCHITECTURE_NAME,
                 "fusion": "observation_and_transport_embedding_concatenation",
                 "context_conditioning": "bounded_scale_only_bottleneck_residual",
                 "context_direct_to_classifier": False,
@@ -760,7 +656,6 @@ def main() -> None:
         "pretrained_masked_model_weights": str(masked_checkpoint_path),
         "pretrained_masked_model_sha256": masked_checkpoint_sha256,
         "pretrained_masked_model_role": "missing_pixel_completion_only",
-        "encoder_architectures": [ENCODER_ARCHITECTURE_NAME, TRANSPORT_ENCODER_ARCHITECTURE_NAME],
         "encoder_initialization": "random",
         "completed_raster_paths": {split: str(path) for split, path in completed_paths.items()},
         "completed_raster_keys": list(MODEL_IMAGE_KEYS + MODEL_MASK_KEYS),
