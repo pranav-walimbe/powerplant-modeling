@@ -36,7 +36,7 @@ from modeling.eval_utils import (
 )
 from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
-from modeling.transport import AdvectionTransform
+from modeling.transport import TransportTransform
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -329,7 +329,7 @@ def _fit_transport_residual_stats(
     stats: NormalizationStats,
 ) -> dict[str, float]:
     # Fit quality-weighted physical residual moments on the training split
-    transport = AdvectionTransform(stats.image_center, stats.image_scale)
+    transport = TransportTransform(stats.image_center, stats.image_scale)
     total_weight = 0.0
     weighted_sum = 0.0
     weighted_square_sum = 0.0
@@ -473,7 +473,7 @@ def main() -> None:
     )
     transport_residual_stats = _fit_transport_residual_stats(transport_stats_loader, stats)
     del transport_stats_loader
-    transport_transform = AdvectionTransform(
+    transport_transform = TransportTransform(
         stats.image_center,
         stats.image_scale,
         residual_center=transport_residual_stats["center"],

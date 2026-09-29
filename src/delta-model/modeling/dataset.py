@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from modeling.transport import AdvectionTransform
+from modeling.transport import TransportTransform
 from torch.utils.data import Dataset
 
 from config import (
@@ -432,7 +432,7 @@ class NOxDataset(Dataset):
         load_images: bool = True,
         completed_raster_path: str | Path | None = None,
         aoi_normalize_no2: bool = True,
-        transport_transform: AdvectionTransform | None = None,
+        transport_transform: TransportTransform | None = None,
         per_timestep_context: bool = False,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
