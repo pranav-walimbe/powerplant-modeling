@@ -53,8 +53,7 @@ from config import (
     MIN_TIMESTEP_NO2_FINITE_FRACTION,
     NUM_CORES,
     SEQUENCE_TIMESTEPS,
-    STRATIFICATION_WINDOW_ABSOLUTE_FLOOR,
-    STRATIFICATION_WINDOW_RELATIVE_FLOOR,
+    STRATIFICATION_WINDOW_THRESHOLD,
     TEMPO_DIR,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
@@ -594,8 +593,7 @@ def _plot_post_filter_window_behavior(splits: dict[str, pl.DataFrame], output_pa
             axis.legend()
     figure.suptitle(
         "Five-timestep emissions behavior after raster filtering\n"
-        f"Threshold: max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
-        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint); lines show median and IQR"
+        f"Threshold: {STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; lines show median and IQR"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=180)

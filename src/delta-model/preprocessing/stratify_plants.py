@@ -39,8 +39,7 @@ from config import (
     STRAT_BASE_DIR,
     STRATIFICATION_AOI_FRACTION,
     STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
-    STRATIFICATION_WINDOW_ABSOLUTE_FLOOR,
-    STRATIFICATION_WINDOW_RELATIVE_FLOOR,
+    STRATIFICATION_WINDOW_THRESHOLD,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
     VAL_RECORDS_CSV,
@@ -49,7 +48,8 @@ from config import (
 
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
 SPLIT_SEED = 42
-MIN_STEADY_SELECTION_WEIGHT = 0.01
+STEADY_SELECTION_WEIGHT_POWER = 8.0
+MIN_STEADY_SELECTION_WEIGHT = 1e-9
 DELTA_CATEGORY_COL = "delta_category"
 AOI_SCORE_COL = "aoi_score"
 AOI_SCORE_PERCENTILE_COL = "aoi_score_percentile"
@@ -240,14 +240,10 @@ def filter_stratification_rule(frame: pl.DataFrame) -> pl.DataFrame:
         frame: Eligible records carrying time-weighted start and end NOx means.
 
     Returns:
-        Records carrying the hybrid threshold and class.
+        Records carrying the absolute threshold and class.
     """
-    midpoint = (pl.col(AVG_NOX_START_COL) + pl.col(AVG_NOX_END_COL)) / 2
-    threshold = pl.max_horizontal(
-        pl.lit(STRATIFICATION_WINDOW_ABSOLUTE_FLOOR),
-        STRATIFICATION_WINDOW_RELATIVE_FLOOR * midpoint,
-    )
     change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
+    threshold = pl.lit(STRATIFICATION_WINDOW_THRESHOLD)
     return frame.with_columns(threshold.alias(HYBRID_THRESHOLD_COL)).with_columns(
         pl.when(change <= -pl.col(HYBRID_THRESHOLD_COL))
         .then(pl.lit("decrease"))
@@ -317,9 +313,10 @@ def select_balanced_window_records(
         class_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
         if class_name == "steady":
             change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
-            weight = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(
-                MIN_STEADY_SELECTION_WEIGHT,
-                1.0,
+            center_proximity = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(0.0, 1.0)
+            weight = center_proximity.pow(STEADY_SELECTION_WEIGHT_POWER).clip(
+                lower_bound=MIN_STEADY_SELECTION_WEIGHT,
+                upper_bound=1.0,
             )
             class_records = deterministic_weighted_sample(
                 class_records,
@@ -339,8 +336,7 @@ def select_balanced_window_records(
     balanced = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
     count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
     print(
-        f"[{split}] threshold=max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g}, "
-        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint); eligible {count_summary}; "
+        f"[{split}] threshold={STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; eligible {count_summary}; "
         f"selected {records_per_class:,} per class ({balanced.height:,} total)"
     )
     return balanced
@@ -414,8 +410,7 @@ def _plot_stratification_diagnostics(
             bucket_axis.legend(loc="upper left")
     figure.suptitle(
         "Five-timestep emissions behavior by final class\n"
-        f"Threshold: max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
-        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint); lines show median and IQR"
+        f"Threshold: {STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; lines show median and IQR"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=180)
@@ -801,8 +796,7 @@ def main() -> None:
     frame = filter_stratification_rule(candidates)
     print(
         f"Labeled {frame.height:,} records with time-weighted window threshold "
-        f"max({STRATIFICATION_WINDOW_ABSOLUTE_FLOOR:g} lb/hr, "
-        f"{STRATIFICATION_WINDOW_RELATIVE_FLOOR:.0%} of early-late midpoint)"
+        f"{STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute"
     )
     frame, class_audit = filter_aoi_class_floor(frame)
     eligible_aoi_count = class_audit.filter(pl.col("meets_class_floor")).height
