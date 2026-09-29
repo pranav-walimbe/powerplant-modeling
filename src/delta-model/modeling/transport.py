@@ -28,16 +28,6 @@ class TransportConfig:
     next_wind_weight: float = 0.5
     wind_speed_multiplier: float = 0.8
 
-    def __post_init__(self) -> None:
-        if self.decay_lifetime_hours is not None and self.decay_lifetime_hours <= 0:
-            raise ValueError("decay_lifetime_hours must be positive or None")
-        if self.dispersion_sigma_pixels_at_one_hour < 0:
-            raise ValueError("dispersion_sigma_pixels_at_one_hour cannot be negative")
-        if not 0.0 <= self.next_wind_weight <= 1.0:
-            raise ValueError("next_wind_weight must be between zero and one")
-        if self.wind_speed_multiplier <= 0:
-            raise ValueError("wind_speed_multiplier must be positive")
-
 
 def _base_grid(height: int, width: int, reference: torch.Tensor) -> torch.Tensor:
     # Build pixel-center coordinates for align_corners=False sampling
@@ -125,19 +115,6 @@ def advect_no2(
     Returns:
         Advected NO2 and advected source quality.
     """
-    tensors = (source_no2, source_quality, current_wind_mps, next_wind_mps, elapsed_hours)
-    if any(tensor.device.type != "cpu" for tensor in tensors):
-        raise ValueError("Transport operations require CPU tensors")
-    if source_no2.ndim != 4 or source_no2.shape[1] != 1:
-        raise ValueError("source_no2 must have shape batch by one by height by width")
-    if source_quality.shape != source_no2.shape:
-        raise ValueError("source_quality must match source_no2")
-    expected_wind_shape = (source_no2.shape[0], 2, *source_no2.shape[-2:])
-    if current_wind_mps.shape != expected_wind_shape or next_wind_mps.shape != expected_wind_shape:
-        raise ValueError("wind tensors must have shape batch by two by height by width")
-    if elapsed_hours.shape != (source_no2.shape[0],):
-        raise ValueError("elapsed_hours must contain one value per batch item")
-
     next_weight = config.next_wind_weight
     wind = ((1.0 - next_weight) * current_wind_mps + next_weight * next_wind_mps)
     wind = wind * config.wind_speed_multiplier
@@ -293,11 +270,6 @@ class TransportTransform:
         Returns:
             Physical residual and quality tensors with four timesteps.
         """
-        inputs = (image, elapsed_hours, no2_normalization)
-        if any(value.device.type != "cpu" for value in inputs):
-            raise ValueError("TransportTransform requires CPU tensors")
-        if transport_wind_mps is not None and transport_wind_mps.device.type != "cpu":
-            raise ValueError("TransportTransform requires CPU transport wind tensors")
         batch_size, timesteps, _, height, width = image.shape
         interval_count = timesteps - 1
         no2_center = no2_normalization[:, 0, None, None, None]

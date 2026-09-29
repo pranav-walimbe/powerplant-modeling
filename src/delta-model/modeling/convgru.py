@@ -163,21 +163,6 @@ class VisionClassifier(nn.Module):
         residual_scale: torch.Tensor,
     ) -> torch.Tensor:
         # Modulate real inputs without synthesizing an initial residual
-        if observation.shape[1] != residual.shape[1] + 1:
-            raise ValueError(
-                "Expected one more observation timestep than transport-residual timesteps, "
-                f"received {observation.shape[1]} and {residual.shape[1]}"
-            )
-        if observation.shape[:2] != observation_scale.shape[:2]:
-            raise ValueError(
-                "Expected one observation scale per observation timestep, "
-                f"received {observation.shape[:2]} and {observation_scale.shape[:2]}"
-            )
-        if residual.shape[:2] != residual_scale.shape[:2]:
-            raise ValueError(
-                "Expected one residual scale per transport timestep, "
-                f"received {residual.shape[:2]} and {residual_scale.shape[:2]}"
-            )
         hidden = observation[:, 0] * observation_scale[:, 0, :, None, None]
         for transition in range(residual.shape[1]):
             observation_features = (
