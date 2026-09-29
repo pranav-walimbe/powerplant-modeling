@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from modeling.transport import TransportTransform
 from torch.utils.data import Dataset
 
 from config import (
@@ -98,11 +99,35 @@ def _read_split_frame(split: str, dataframe_dir: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
-    # Derive daily and annual phase from the label-aligned final scan
-    utc_time = pd.to_datetime(frame[FINAL_TIMESTEP_TIME_COLUMN], errors="coerce", utc=True)
+def _midpoint_local_time(frame: pd.DataFrame) -> pd.Series:
+    # Locate the sample midpoint and convert it from UTC to local solar time
+    start = pd.to_datetime(frame[TIMESTEP_TIME_COLUMNS[0]], errors="coerce", utc=True)
+    end = pd.to_datetime(frame[TIMESTEP_TIME_COLUMNS[-1]], errors="coerce", utc=True)
+    utc_time = start + (end - start) / 2
     longitude = pd.to_numeric(frame["lon"], errors="coerce")
-    solar_time = utc_time + pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
+    return utc_time + pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
+
+
+def midpoint_local_solar_hour(frame: pd.DataFrame) -> pd.Series:
+    """Calculate fractional local solar hour at each sample midpoint.
+
+    Args:
+        frame: Records containing sequence timestamps and longitude.
+
+    Returns:
+        Fractional hours in the range from zero through twenty-four.
+    """
+    solar_time = _midpoint_local_time(frame)
+    return (
+        solar_time.dt.hour
+        + solar_time.dt.minute / 60.0
+        + solar_time.dt.second / 3_600.0
+        + solar_time.dt.microsecond / 3_600_000_000.0
+    )
+
+
+def _cyclic_feature_matrix(solar_time: pd.Series) -> np.ndarray:
+    # Encode one local-solar timestamp as daily and annual phase
     seconds = (
         solar_time.dt.hour * 3_600
         + solar_time.dt.minute * 60
@@ -121,6 +146,23 @@ def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
             np.cos(annual_angle),
         )
     )
+
+
+def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
+    # Preserve midpoint context for the seasonal-only baseline
+    return _cyclic_feature_matrix(_midpoint_local_time(frame))
+
+
+def _timestep_feature_matrix(frame: pd.DataFrame) -> np.ndarray:
+    # Round each observation's local solar time before cyclic encoding
+    longitude = pd.to_numeric(frame["lon"], errors="coerce")
+    solar_offset = pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
+    timestep_features = []
+    for column in TIMESTEP_TIME_COLUMNS:
+        utc_time = pd.to_datetime(frame[column], errors="coerce", utc=True)
+        rounded_solar_time = (utc_time + solar_offset + pd.Timedelta(minutes=30)).dt.floor("h")
+        timestep_features.append(_cyclic_feature_matrix(rounded_solar_time))
+    return np.stack(timestep_features, axis=1)
 
 
 def _raster_path(serialized_path: object, dataset_dir: Path) -> Path:
@@ -390,17 +432,33 @@ class NOxDataset(Dataset):
         load_images: bool = True,
         completed_raster_path: str | Path | None = None,
         aoi_normalize_no2: bool = True,
+        transport_transform: TransportTransform | None = None,
+        per_timestep_context: bool = False,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
         self.aoi_normalize_no2 = aoi_normalize_no2
+        self.transport_transform = transport_transform
+        self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.aoi_ids = pd.to_numeric(self.frame["aoi_id"], errors="raise").to_numpy(dtype=np.int64)
+        no2_normalization = [
+            _image_normalization(self.stats, int(aoi_id), self.aoi_normalize_no2)
+            for aoi_id in self.aoi_ids
+        ]
+        self.no2_normalization = np.asarray(
+            [(center[NO2_CHANNEL], scale[NO2_CHANNEL]) for center, scale in no2_normalization],
+            dtype=np.float32,
+        )
 
-        raw_features = _feature_matrix(self.frame)
+        raw_features = (
+            _timestep_feature_matrix(self.frame)
+            if self.per_timestep_context
+            else _feature_matrix(self.frame)
+        )
         feature_mean = np.asarray(self.stats.feature_mean, dtype=np.float64)
         feature_std = np.asarray(self.stats.feature_std, dtype=np.float64)
         self.features = ((raw_features - feature_mean) / feature_std).astype(np.float32)
@@ -422,7 +480,7 @@ class NOxDataset(Dataset):
     def __len__(self) -> int:
         return len(self.labels)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
         if self.load_images:
             if self.completed_raster_path is not None:
                 if self._completed_rasters is None:
@@ -453,10 +511,20 @@ class NOxDataset(Dataset):
                 image = torch.from_numpy(np.concatenate((normalized, masks), axis=1))
         else:
             image = torch.empty(0, dtype=torch.float32)
+        transport = torch.empty(0, dtype=torch.float32)
+        if self.transport_transform is not None:
+            elapsed_hours = torch.from_numpy(self.elapsed_hours[index]).unsqueeze(0)
+            no2_normalization = torch.from_numpy(self.no2_normalization[index]).unsqueeze(0)
+            residual, quality = self.transport_transform(
+                image.unsqueeze(0),
+                elapsed_hours,
+                no2_normalization,
+            )
+            transport = torch.cat((residual, quality), dim=2).squeeze(0)
         return (
             image,
             torch.from_numpy(self.features[index]),
-            torch.from_numpy(self.elapsed_hours[index]),
+            transport,
             torch.tensor(self.labels[index]),
             index,
         )

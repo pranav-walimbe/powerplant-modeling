@@ -1,116 +1,85 @@
 # Modeling
 
-The delta-model trainer compares a seasonal classifier with a learned-fusion
-classifier on the same geographic splits. The masked NO2 model fills missing
-raster pixels before classifier training. Its encoder does not initialize the
-vision model.
+The delta trainer compares two classifiers on the same geographic splits and
+fixed seed. A pretrained masked model fills low-quality NO2 pixels before
+classifier training. The classifier still receives the original NO2 quality
+mask, so it can distinguish observations from filled values.
 
 ## Contract
 
-| Component | Current choice |
+| Component | Choice |
 |---|---|
 | Target | Stored `delta_category` |
-| Classes | `decrease`, `steady`, `increase`, mapped to 0, 1, and 2 |
-| Raster sequence | Five completed frames with shape `5 x 4 x 24 x 24` |
-| Raster channels | NO2, 2 m temperature, eastward wind, northward wind |
-| Seasonal input | Local-solar-hour sine/cosine and day-of-year sine/cosine |
+| Classes | `decrease`, `steady`, `increase` |
+| Observation sequence | Five frames at `24 x 24` pixels |
+| Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
+| Transport sequence | Four advection residuals and residual-quality rasters |
+| Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
 | Loss | Unweighted three-class cross-entropy |
-| Prediction | Softmax distribution over the three classes |
-| Checkpoint selection | Lowest validation cross-entropy for each model |
-| Primary result | Jointly trained raster-seasonal embedding fusion classifier |
+| Selection | Lowest validation cross-entropy for each model |
+| Primary result | Context-aware vision classifier |
 
-Dataset generation supplies the class label. The loader consumes that label
-without recreating its construction.
+The seasonal baseline uses context at the midpoint between the first and fifth
+TEMPO scans. The vision model uses context at all five observation timestamps.
+It converts UTC to local solar time with longitude, rounds vision-model hours
+to the nearest whole hour, and normalizes the four cyclic features with
+training-split statistics.
 
-## Seasonal features
+## Raster completion and quality
 
-The loader derives all four seasonal features from `t4_timestamp`, the final
-scan aligned with the target. It shifts the UTC timestamp by `longitude / 15`
-hours to obtain local solar time. Daily phase includes hour, minute, second, and
-microsecond. Annual phase uses the resulting local-solar day of year plus the
-fractional day and accounts for leap years. Training-split means and standard
-deviations normalize the four derived values.
+The masked model uses its checkpoint's global statistics to fill NO2. Training
+stores five channels in job-local memory-mapped arrays: the four completed
+physical inputs plus the original NO2 mask. Observed pixels receive quality 1;
+filled pixels receive quality 0. The classifier processes every filled value
+and uses quality as a separate input channel.
 
-The seasonal model receives these inputs:
+The classifier applies AOI-specific median and robust scale to NO2. It uses the
+masked checkpoint's global mean and standard deviation for temperature and
+wind. Training fits all normalization state on the training split.
 
-- `local_solar_hour_sin` and `local_solar_hour_cos`;
-- `day_of_year_sin` and `day_of_year_cos`.
+## Transport residuals
 
-AOI score, city distance, unit counts, heat input, generation, latitude, and
-longitude do not enter either classifier. The test-strata report uses selected
-AOI characteristics after inference.
+The data-loader's CPU transport transform converts normalized NO2 back to
+physical units. For each of four intervals, it averages endpoint 80-meter
+winds and performs backward semi-Lagrangian warping with bilinear
+interpolation. It subtracts the transported previous observation from the
+current observation before the batch is transferred to the GPU.
 
-## Raster normalization and completion
+Residual quality equals current NO2 quality multiplied by warped source NO2
+quality. Backtraces outside the raster receive zero quality while the residual
+value remains available to the encoder. A training-only pass fits
+quality-weighted residual mean and standard deviation.
 
-Training loads the configured masked-model checkpoint before it builds the
-classifier datasets. The masked model uses its checkpoint's global statistics
-while it fills missing NO2 pixels. The vision classifier then converts the
-completed NO2 channel to AOI-specific normalization while retaining the masked
-model's global weather normalization:
-
-| Channels | Center | Scale | Scope |
-|---|---|---|---|
-| NO2 | Median | `IQR / 1.349` | AOI-specific for classifier input |
-| Temperature and wind | Mean | Population standard deviation | Global masked-model statistics |
-
-The AOI statistics job samples up to 40 TEMPO rasters per calendar month for
-each AOI in the finalized splits. It pools finite NO2 pixels and writes each
-AOI's median and robust scale to `aoi-no2-normalization.json`.
-
-The loader applies the masked-model normalization, clips values to `[-8, 8]`,
-fills numeric gaps with zero, and appends `no2_mask` for reconstruction. The
-masked autoencoder predicts NO2 at missing pixels and preserves observed
-values. Training writes the four globally normalized completed channels to
-split-specific memory-mapped arrays under the job-local `/tmp` directory. The
-classifier loader converts completed NO2 back to physical units, applies the
-record's AOI statistics, and clips the result to `[-8, 8]`.
-
-Classifier training starts after completion finishes. Neither classifier sees
-the validity mask, and the vision encoder starts from random weights.
+The operator accepts an optional decay lifetime and optional interval wind
+fields. These hooks support later decay and elevated-wind or plume-rise
+experiments. The horizontal-advection baseline leaves both disabled.
 
 ## Models
 
-### Seasonal classifier
+The training job fits these models:
 
-The 291-parameter seasonal MLP maps four inputs through 16-value and 8-value
-hidden representations before producing three logits. Training selects its
-lowest-validation-loss checkpoint.
+- `seasonal`: the context-only MLP diagnostic;
+- `vision`: the context-aware observation and transport-residual classifier.
 
-### Learned-fusion classifier
+The observation branch processes five frames. The residual branch processes
+four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
+sine/cosine at each observation timestamp. Separate zero-initialized heads
+produce bounded channel-wise scale changes for the observation and residual
+spatial bottlenecks. The first observation is scaled with its own context and
+initializes the temporal state without a synthetic residual. Each later
+observation and aligned residual are scaled with that timestep's context,
+fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 
-The trainer learns a separate seasonal encoder jointly with the raster branch.
-A frame encoder maps each completed raster to a
-`48 x 6 x 6` feature map. A 48-channel ConvGRU processes the five maps in time
-order. Global average and maximum pooling feed a 48-value projection and a
-48-value vision embedding. The model concatenates that embedding with an
-8-value seasonal embedding and learns a shared 48-value classification head.
-Both branches train end to end with unweighted hard cross-entropy.
-
-```mermaid
-flowchart LR
-    Timestamp[t4 timestamp and longitude] -->|derive phase| SeasonalFeatures[Four seasonal features]
-    SeasonalFeatures --> SeasonalEncoder[Learned seasonal encoder]
-
-    MaskedModel[Masked NO2 model] -->|fill missing pixels| Completed[Five completed raster frames]
-    Completed --> FrameEncoder[Frame encoder with random initialization]
-    FrameEncoder --> ConvGRU[48-channel ConvGRU]
-    ConvGRU --> VisionEmbedding[48-value vision embedding]
-
-    SeasonalEncoder --> Concatenate[Concatenate embeddings]
-    VisionEmbedding --> Concatenate
-    Concatenate --> SharedHead[Learned classification head]
-    SharedHead --> Distribution[Class distribution]
-```
+This is identity-initialized scale-only FiLM without an additive shift.
+Training drops the full context sequence for a random share of samples. The
+job also saves predictions and metrics from shuffled-context inference.
 
 ## Optimization
 
-Both classifiers use unweighted hard cross-entropy, AdamW, gradient clipping,
-validation-loss scheduling, CUDA mixed precision, and early stopping. Defaults
-allow 75 seasonal epochs and 100 fusion epochs. Training stops after 15 epochs
-without a lower validation loss;
-the scheduler halves the learning rate after 10 such epochs. The maintained
-Slurm launcher uses a batch size of 128, a vision learning rate of `3e-4`, a
-48-channel vision width, a 48-value head, 30% dropout, and seed 42.
+All classifiers use AdamW, gradient clipping, mixed precision, validation-loss
+scheduling, and early stopping. The maintained launcher uses batch size 128,
+model width 48, head width 48, dropout 0.30, and seed 42. It does not tune new
+transport or conditioning parameters.
 
 Run the production workflow with:
 
@@ -118,29 +87,19 @@ Run the production workflow with:
 sbatch scripts/slurm/train_model.sh
 ```
 
-Direct module execution requires `--completed-raster-dir` under `/tmp` and
-a valid `--pretrained-masked-model-weights` path.
-
 ## Evaluation and artifacts
 
-Each model reports accuracy, balanced accuracy, macro F1, one-vs-rest macro
-AUROC, class counts, per-class recall, and a three-class confusion matrix in
-`results.json`.
+`results.json` reports accuracy, balanced accuracy, macro F1, macro one-vs-rest
+AUROC, per-class recall, confusion matrices, and predicted-class frequencies.
+The run also writes row-level predictions, best checkpoints, normalization
+state, residual statistics, and shuffled-context diagnostics.
 
-The trainer produces three summary figures:
+The trainer produces three figures:
 
-- `split_class_accuracy.png` shows labeled overall accuracy bars by split and
-  labeled per-class recall bars within each split;
-- `training_curves.png` shows train and validation loss for both models;
-- `accuracy_by_characteristic.png` compares model accuracy across test-set
-  average-heat-input and unit-count tertiles, plus calendar month for the test
-  and validation splits.
+- `split_class_accuracy.png` compares overall and per-class performance;
+- `training_curves.png` shows train and validation loss;
+- `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
+  unit count, calendar month, and midpoint local solar hour.
 
-The characteristic figure assigns average heat input and unit count at the
-unique-AOI level. Month comes from each record's label-aligned final TEMPO
-timestamp. Labels report learned-fusion accuracy minus seasonal accuracy.
-`accuracy_by_characteristic.csv` stores the plotted split, counts,
-stratification unit, value ranges, accuracies, and differences.
-
-The run directory contains both best checkpoints, preprocessing state,
-run configuration, and row-level predictions for each model and split.
+The test plots describe the fixed model and do not participate in model
+selection.

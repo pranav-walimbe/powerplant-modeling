@@ -50,6 +50,12 @@ def classification_metrics(frame: pd.DataFrame) -> dict[str, object]:
         "macro_f1": float(f1_score(truth, predicted, average="macro", zero_division=0)),
         "macro_ovr_roc_auc": macro_roc_auc,
         "class_counts": {name: int(np.sum(truth == index)) for index, name in enumerate(MODEL_CLASS_NAMES)},
+        "predicted_class_counts": {
+            name: int(np.sum(predicted == index)) for index, name in enumerate(MODEL_CLASS_NAMES)
+        },
+        "predicted_class_frequencies": {
+            name: float(np.mean(predicted == index)) for index, name in enumerate(MODEL_CLASS_NAMES)
+        },
         "class_recall": {name: float(recalls[index]) for index, name in enumerate(MODEL_CLASS_NAMES)},
         "confusion_matrix": confusion.tolist(),
     }

@@ -9,6 +9,22 @@ SEASONAL_HIDDEN_DIM = 16
 SEASONAL_EMBEDDING_DIM = 8
 
 
+def build_seasonal_encoder(
+    n_features: int,
+    hidden_dim: int = SEASONAL_HIDDEN_DIM,
+    embedding_dim: int = SEASONAL_EMBEDDING_DIM,
+) -> nn.Sequential:
+    """Build the shared seasonal and solar context encoder."""
+    return nn.Sequential(
+        nn.Linear(n_features, hidden_dim),
+        nn.LayerNorm(hidden_dim),
+        nn.SiLU(inplace=True),
+        nn.Linear(hidden_dim, embedding_dim),
+        nn.LayerNorm(embedding_dim),
+        nn.SiLU(inplace=True),
+    )
+
+
 class SeasonalMLP(nn.Module):
     """Classify emissions changes from daily and annual phase."""
 
@@ -20,14 +36,7 @@ class SeasonalMLP(nn.Module):
     ) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
-        self.encoder = nn.Sequential(
-            nn.Linear(n_features, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(hidden_dim, embedding_dim),
-            nn.LayerNorm(embedding_dim),
-            nn.SiLU(inplace=True),
-        )
+        self.encoder = build_seasonal_encoder(n_features, hidden_dim, embedding_dim)
         self.classifier = nn.Linear(embedding_dim, len(MODEL_CLASS_NAMES))
 
     def encode(self, seasonal: torch.Tensor) -> torch.Tensor:
@@ -38,10 +47,10 @@ class SeasonalMLP(nn.Module):
         self,
         image: torch.Tensor,
         seasonal: torch.Tensor,
-        elapsed_hours: torch.Tensor | None = None,
+        transport: torch.Tensor,
     ) -> torch.Tensor:
         """Predict one logit for each emissions-change class."""
-        del image, elapsed_hours
+        del image, transport
         return self.classifier(self.encode(seasonal))
 
     def num_params(self) -> int:
