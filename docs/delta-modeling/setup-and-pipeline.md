@@ -141,7 +141,7 @@ temporary memory-mapped arrays, and trains four classifiers:
 - a two-branch observation and advection-residual model without context;
 - the same two-branch model with scale-only bottleneck context conditioning.
 
-The launcher requests one A5000 GPU, four CPUs, and 12 hours on
+The launcher requests one A5000 GPU, four CPUs, and two hours on
 `savio4_gpu` with `a5k_gpu4_normal`. It emails split and class accuracy,
 training curves, and the test characteristic comparison after a successful
 run. See [modeling.md](modeling.md) for the model contract.
@@ -156,7 +156,7 @@ run. See [modeling.md](modeling.md) for the model contract.
 | Dataset shards | `launch_dataset_generation.sh` | Up to 8 tasks, 8 CPUs each, 12 hours |
 | AOI normalization | `aoi_normalization.sh` | 16 CPUs, 8 hours, high-memory node |
 | Masked pretraining | `train_masked_pretraining.sh` | 1 A5000, 4 CPUs, 8 hours |
-| Delta classification | `train_model.sh` | 1 A5000, 4 CPUs, 12 hours |
+| Delta classification | `train_model.sh` | 1 A5000, 4 CPUs, 2 hours |
 
 Savio policies and availability can change. Check the requested account,
 partition, and QoS before submission.
