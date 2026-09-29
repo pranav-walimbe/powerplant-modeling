@@ -18,12 +18,15 @@ MIN_GAUSSIAN_SIGMA = 1e-6
 
 @dataclass(frozen=True)
 class TransportConfig:
-    """Physical parameters for one NO2 transport step."""
+    """Physical parameters for one NO2 transport step.
 
-    decay_lifetime_hours: float | None = None
-    dispersion_sigma_pixels_at_one_hour: float = 0.0
+    Defaults are selected from the steady-pair training and validation sweep.
+    """
+
+    decay_lifetime_hours: float | None = 8.0
+    dispersion_sigma_pixels_at_one_hour: float = 1.0
     next_wind_weight: float = 0.5
-    wind_speed_multiplier: float = 1.0
+    wind_speed_multiplier: float = 0.8
 
     def __post_init__(self) -> None:
         if self.decay_lifetime_hours is not None and self.decay_lifetime_hours <= 0:
