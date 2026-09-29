@@ -110,9 +110,10 @@ AOI in the published splits:
 sbatch scripts/slurm/aoi_normalization.sh
 ```
 
-The job samples up to 40 TEMPO rasters per AOI and calendar month, reuses the
-persistent TEMPO cache, and writes `aoi-no2-normalization.json` under the
-dataset root. Delta training requires this file.
+The job samples up to 60 TEMPO rasters per AOI and calendar month, for up to
+720 rasters per AOI across a full year. It reuses the persistent TEMPO cache
+and writes `aoi-no2-normalization.json` under the dataset root. Delta training
+requires this file.
 
 ## 5. Provide a masked-model checkpoint
 

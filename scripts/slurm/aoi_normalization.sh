@@ -38,6 +38,7 @@ export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
 srun python -u -m preprocessing.aoi_normalization \
     --output "${output}" \
     --plot-output "${plot}" \
+    --rasters-per-month 60 \
     --workers "${SLURM_CPUS_PER_TASK}"
 
 for artifact in "${output}" "${plot}"; do
