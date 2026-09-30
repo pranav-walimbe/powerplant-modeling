@@ -3,7 +3,6 @@
 #SBATCH --account=fc_nitrates
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
-#SBATCH --constraint=savio4_m512
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
