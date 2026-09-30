@@ -83,6 +83,7 @@ printf '%s\n' \
     'Five causal rasters retained; labels compare time-weighted t0-t2 and t2-t4 averages.' \
     'Each timestep NOx value is linearly interpolated between its surrounding CAMPD hours.' \
     'Geographic AOI clusters were assigned by AOI and candidate-record counts to approximately 70/15/15 splits.' \
+    'Validation and test class contributions are balanced during geographic assignment.' \
     'Training classes are downsampled to the smallest training class with a fixed seed.' \
     'Validation and test retain every change record, then uniformly sample steady to match the larger change class.' \
     "Train: ${train_records} records" \

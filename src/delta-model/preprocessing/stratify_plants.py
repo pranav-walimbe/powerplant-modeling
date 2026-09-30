@@ -151,26 +151,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
-    # Optimize indivisible geographic clusters against record and AOI targets
-    target_columns = ("records", "aois")
-    cluster_counts = (
-        frame.group_by("cluster")
-        .agg(
-            pl.len().alias("records"),
-            pl.col(AOI_ID_COL).n_unique().alias("aois"),
-        )
-        .with_columns(pl.col("cluster").hash(seed=SPLIT_SEED).alias("_tie_breaker"))
-        .sort(["records", "_tie_breaker"], descending=[True, False])
-    )
-    if cluster_counts.height < len(SPLIT_FRACTIONS):
-        raise ValueError("At least three geographic clusters are required")
-
-    split_names = tuple(SPLIT_FRACTIONS)
+def _optimize_cluster_assignments(
+    cluster_counts: pl.DataFrame,
+    split_fractions: dict[str, float],
+    target_columns: tuple[str, ...],
+) -> pl.DataFrame:
+    # Assign indivisible clusters by minimizing normalized target deviations
+    if cluster_counts.height < len(split_fractions):
+        raise ValueError(f"At least {len(split_fractions)} geographic clusters are required")
+    split_names = tuple(split_fractions)
     totals = {column: float(cluster_counts[column].sum()) for column in target_columns}
     targets = {
         split: {column: totals[column] * fraction for column in target_columns}
-        for split, fraction in SPLIT_FRACTIONS.items()
+        for split, fraction in split_fractions.items()
     }
     cluster_rows = list(cluster_counts.iter_rows(named=True))
     cluster_count = len(cluster_rows)
@@ -227,15 +220,47 @@ def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
     if not result.success or result.x is None:
         raise RuntimeError(f"Geographic split optimization failed: {result.message}")
     decisions = result.x[:assignment_variable_count].reshape(cluster_count, split_count)
-    cluster_assignments = [
-        {"cluster": cluster["cluster"], "split": split_names[int(np.argmax(decisions[index]))]}
-        for index, cluster in enumerate(cluster_rows)
-    ]
-
-    assignments = pl.DataFrame(
-        cluster_assignments,
-        schema={"cluster": frame.schema["cluster"], "split": pl.String},
+    return pl.DataFrame(
+        [
+            {"cluster": cluster["cluster"], "split": split_names[int(np.argmax(decisions[index]))]}
+            for index, cluster in enumerate(cluster_rows)
+        ],
+        schema={"cluster": cluster_counts.schema["cluster"], "split": pl.String},
     )
+
+
+def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    # Preserve the training allocation before class-balancing held-out clusters
+    cluster_counts = (
+        frame.group_by("cluster")
+        .agg(
+            pl.len().alias("records"),
+            pl.col(AOI_ID_COL).n_unique().alias("aois"),
+            *[
+                (pl.col(DELTA_CATEGORY_COL) == class_name).sum().alias(class_name)
+                for class_name in CLASS_NAMES
+            ],
+        )
+        .with_columns(pl.col("cluster").hash(seed=SPLIT_SEED).alias("_tie_breaker"))
+        .sort(["records", "_tie_breaker"], descending=[True, False])
+    )
+    initial_assignments = _optimize_cluster_assignments(
+        cluster_counts,
+        SPLIT_FRACTIONS,
+        ("records", "aois"),
+    )
+    train_assignments = initial_assignments.filter(pl.col("split") == "train")
+    held_out_counts = cluster_counts.join(
+        initial_assignments.filter(pl.col("split") != "train").select("cluster"),
+        on="cluster",
+        how="inner",
+    )
+    held_out_assignments = _optimize_cluster_assignments(
+        held_out_counts,
+        {"val": 0.5, "test": 0.5},
+        ("records", "aois", *CLASS_NAMES),
+    )
+    assignments = pl.concat((train_assignments, held_out_assignments))
     splits = {
         split: frame.join(
             assignments.filter(pl.col("split") == split).select("cluster"),
@@ -244,12 +269,15 @@ def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
         )
         for split in SPLIT_FRACTIONS
     }
+    total_aois = float(cluster_counts["aois"].sum())
     for split, split_frame in splits.items():
         aoi_count = split_frame[AOI_ID_COL].n_unique()
+        class_counts = dict(split_frame.group_by(DELTA_CATEGORY_COL).len().iter_rows())
+        class_summary = ", ".join(f"{name}={class_counts.get(name, 0):,}" for name in CLASS_NAMES)
         print(
             f"[{split}] assigned {split_frame.height:,}/{frame.height:,} eligible records "
-            f"({split_frame.height / frame.height:.1%}) and {aoi_count:,}/{int(totals['aois']):,} AOIs "
-            f"({aoi_count / totals['aois']:.1%}); target {SPLIT_FRACTIONS[split]:.1%} for both"
+            f"({split_frame.height / frame.height:.1%}) and {aoi_count:,}/{int(total_aois):,} AOIs "
+            f"({aoi_count / total_aois:.1%}); target {SPLIT_FRACTIONS[split]:.1%} for both; {class_summary}"
         )
     return splits
 

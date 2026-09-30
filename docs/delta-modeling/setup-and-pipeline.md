@@ -64,9 +64,11 @@ sbatch scripts/slurm/stratify_plants.sh
 The observation launcher runs 32 tasks. Stratification ranks facility-centered
 AOIs by activity-conditioned median NOx, retains the highest-scoring half,
 builds five-timestep time-weighted window targets, and assigns overlapping AOIs
-to the same geographic split. Training is balanced to its smallest class.
-Validation and test keep every increase and decrease record, then use
-fixed-seed uniform steady samples to match their larger change class. See
+to the same geographic split. The assignment first fixes the 70% training
+allocation by AOIs and raw records, then balances AOI, record, and class counts
+between validation and test. Training is balanced to its smallest class.
+Validation and test keep every increase and decrease record, then use fixed-seed
+uniform steady samples to match their larger change class. See
 [dataset_design.md](dataset_design.md).
 
 ## 3. Generate raster records

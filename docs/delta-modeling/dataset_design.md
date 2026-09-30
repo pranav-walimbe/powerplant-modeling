@@ -10,7 +10,7 @@ three-class emissions-change label for a 72 km area of interest (AOI).
 | Target column | `delta_category` |
 | Classes | `decrease`, `steady`, `increase` |
 | Split unit | Cluster of overlapping 72 km AOIs |
-| Split target | About 70% train, 15% validation, 15% test by AOIs and candidate records |
+| Split target | About 70% train by AOIs and records; class parity between validation and test |
 | Metadata sampling | Balance training; retain held-out changes and cap steady at the larger change class |
 | Raster quality | At least 85% finite NO2 per timestep |
 | Model selection | Validation split only; test remains frozen |
@@ -39,7 +39,11 @@ The pipeline applies these steps in order:
 6. Assign classes from `avg_nox_end - avg_nox_start` using a 250 lb/hr
    absolute threshold.
 7. Assign each overlap cluster to one split with a deterministic optimization
-   targeting the 70/15/15 ratio for both AOIs and candidate records.
+   targeting the 70/15/15 ratio for both AOIs and candidate records. Freeze the
+   resulting training clusters, then repartition the remaining clusters between
+   validation and test using AOI, record, decrease, steady, and increase counts.
+   This preserves the training-heavy allocation while making the held-out sets
+   comparable after sampling.
 8. Downsample each training class to the smallest training-class count with a
    fixed seed. For validation and test, retain every increase and decrease
    record, then uniformly sample steady records until their count matches the
