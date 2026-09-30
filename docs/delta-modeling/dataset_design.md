@@ -10,8 +10,8 @@ three-class emissions-change label for a 72 km area of interest (AOI).
 | Target column | `delta_category` |
 | Classes | `decrease`, `steady`, `increase` |
 | Split unit | Cluster of overlapping 72 km AOIs |
-| Split target | About 70% train, 15% validation, 15% test within each class |
-| Metadata sampling | Keep all change records and cap steady at the larger change-class count |
+| Split target | About 70% train, 15% validation, 15% test by AOIs and candidate records |
+| Metadata sampling | Balance training; retain held-out changes and fill with near-zero steady records |
 | Raster quality | At least 85% finite NO2 per timestep |
 | Model selection | Validation split only; test remains frozen |
 
@@ -38,15 +38,16 @@ The pipeline applies these steps in order:
    and `t2` through `t4`. Store them as `avg_nox_start` and `avg_nox_end`.
 6. Assign classes from `avg_nox_end - avg_nox_start` using a 250 lb/hr
    absolute threshold.
-7. Retain only AOIs providing at least 20 candidate records in every class.
-8. Assign each overlap cluster to one split with a deterministic procedure that
-   targets the 70/15/15 ratio for each class.
-9. Keep every increase and decrease record. Cap steady records at the larger
-   of the increase and decrease counts within each split. Use deterministic
-   weighted sampling for steady records with weight
-   `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily favors
-   records nearest zero change.
-10. Generate rasters and reject records that fail coverage or source-file checks.
+7. Assign each overlap cluster to one split with a deterministic optimization
+   targeting the 70/15/15 ratio for both AOIs and candidate records.
+8. Downsample each training class to the smallest training-class count with a
+   fixed seed. For validation and test, retain every increase and decrease
+   record, then sample enough steady records to reach each split's target size.
+   Define those target sizes from the selected training size and the 70/15/15
+   proportions. Use deterministic weighted sampling for held-out steady records
+   with weight `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily
+   favors records nearest zero change.
+9. Generate rasters and reject records that fail coverage or source-file checks.
 
 Raster quality control can change class counts after stratification. The
 finalizer emails the retained class trajectories and does not rebalance the

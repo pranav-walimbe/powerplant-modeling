@@ -27,18 +27,17 @@ from preprocessing.stratify_utils import (
     calculate_operating_aoi_characteristics,
     cluster_aois,
     deterministic_weighted_sample,
-    filter_groups_by_class_count,
     filter_usable_nox_measurements,
     usable_nox_measurement_expr,
 )
 from preprocessing.tempo_mapping import load_tempo_mapping
+from scipy.optimize import Bounds, LinearConstraint, milp
 
 from config import (
     FULL_DATA_PARQUET,
     SEQUENCE_TIMESTEPS,
     STRAT_BASE_DIR,
     STRATIFICATION_AOI_FRACTION,
-    STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
     STRATIFICATION_WINDOW_THRESHOLD,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
@@ -154,56 +153,86 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _split_by_cluster(
-    frame: pl.DataFrame,
-    category_column: str | None = None,
-) -> dict[str, pl.DataFrame]:
-    # Greedily assign large clusters against record or class-specific targets
-    category_names = CLASS_NAMES if category_column is not None else ()
-    count_expressions = [pl.len().alias("records")]
-    count_expressions.extend((pl.col(category_column) == category).sum().alias(category) for category in category_names)
+def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    # Optimize indivisible geographic clusters against record and AOI targets
+    target_columns = ("records", "aois")
     cluster_counts = (
         frame.group_by("cluster")
-        .agg(count_expressions)
+        .agg(
+            pl.len().alias("records"),
+            pl.col(AOI_ID_COL).n_unique().alias("aois"),
+        )
         .with_columns(pl.col("cluster").hash(seed=SPLIT_SEED).alias("_tie_breaker"))
         .sort(["records", "_tie_breaker"], descending=[True, False])
     )
     if cluster_counts.height < len(SPLIT_FRACTIONS):
         raise ValueError("At least three geographic clusters are required")
 
-    target_columns = category_names or ("records",)
+    split_names = tuple(SPLIT_FRACTIONS)
     totals = {column: float(cluster_counts[column].sum()) for column in target_columns}
     targets = {
         split: {column: totals[column] * fraction for column in target_columns}
         for split, fraction in SPLIT_FRACTIONS.items()
     }
-    assigned = {split: {column: 0.0 for column in target_columns} for split in SPLIT_FRACTIONS}
-    cluster_assignments: list[dict[str, object]] = []
-    assigned_cluster_counts = {split: 0 for split in SPLIT_FRACTIONS}
-    for index, cluster in enumerate(cluster_counts.iter_rows(named=True)):
-        empty_splits = [split for split, count in assigned_cluster_counts.items() if count == 0]
-        remaining_clusters = cluster_counts.height - index
-        destinations = empty_splits if remaining_clusters == len(empty_splits) else SPLIT_FRACTIONS
-        destination = min(
-            destinations,
-            key=lambda destination: sum(
-                (
-                    (
-                        assigned[split][column]
-                        + (float(cluster[column]) if split == destination else 0.0)
-                        - targets[split][column]
-                    )
-                    / max(targets[split][column], 1.0)
-                )
-                ** 2
-                for split in SPLIT_FRACTIONS
-                for column in target_columns
-            ),
-        )
-        cluster_assignments.append({"cluster": cluster["cluster"], "split": destination})
-        assigned_cluster_counts[destination] += 1
-        for column in target_columns:
-            assigned[destination][column] += float(cluster[column])
+    cluster_rows = list(cluster_counts.iter_rows(named=True))
+    cluster_count = len(cluster_rows)
+    split_count = len(split_names)
+    metric_count = len(target_columns)
+    assignment_variable_count = cluster_count * split_count
+    variable_count = assignment_variable_count + split_count * metric_count
+    objective = np.zeros(variable_count, dtype=np.float64)
+    objective[assignment_variable_count:] = 1.0
+    integrality = np.zeros(variable_count, dtype=np.uint8)
+    integrality[:assignment_variable_count] = 1
+    lower_bounds = np.zeros(variable_count, dtype=np.float64)
+    upper_bounds = np.full(variable_count, np.inf, dtype=np.float64)
+    upper_bounds[:assignment_variable_count] = 1.0
+
+    constraint_count = cluster_count + split_count + 2 * split_count * metric_count
+    coefficients = np.zeros((constraint_count, variable_count), dtype=np.float64)
+    constraint_lower = np.full(constraint_count, -np.inf, dtype=np.float64)
+    constraint_upper = np.full(constraint_count, np.inf, dtype=np.float64)
+    constraint_index = 0
+    for cluster_index in range(cluster_count):
+        start = cluster_index * split_count
+        coefficients[constraint_index, start : start + split_count] = 1.0
+        constraint_lower[constraint_index] = 1.0
+        constraint_upper[constraint_index] = 1.0
+        constraint_index += 1
+    for split_index in range(split_count):
+        coefficients[constraint_index, split_index:assignment_variable_count:split_count] = 1.0
+        constraint_lower[constraint_index] = 1.0
+        constraint_index += 1
+    for split_index, split in enumerate(split_names):
+        for metric_index, column in enumerate(target_columns):
+            deviation_index = assignment_variable_count + split_index * metric_count + metric_index
+            normalized_values = np.array(
+                [float(cluster[column]) / max(targets[split][column], 1.0) for cluster in cluster_rows]
+            )
+            assignment_indices = np.arange(split_index, assignment_variable_count, split_count)
+            coefficients[constraint_index, assignment_indices] = normalized_values
+            coefficients[constraint_index, deviation_index] = -1.0
+            constraint_upper[constraint_index] = 1.0
+            constraint_index += 1
+            coefficients[constraint_index, assignment_indices] = -normalized_values
+            coefficients[constraint_index, deviation_index] = -1.0
+            constraint_upper[constraint_index] = -1.0
+            constraint_index += 1
+
+    result = milp(
+        objective,
+        integrality=integrality,
+        bounds=Bounds(lower_bounds, upper_bounds),
+        constraints=LinearConstraint(coefficients, constraint_lower, constraint_upper),
+        options={"time_limit": 120.0, "mip_rel_gap": 0.0},
+    )
+    if not result.success or result.x is None:
+        raise RuntimeError(f"Geographic split optimization failed: {result.message}")
+    decisions = result.x[:assignment_variable_count].reshape(cluster_count, split_count)
+    cluster_assignments = [
+        {"cluster": cluster["cluster"], "split": split_names[int(np.argmax(decisions[index]))]}
+        for index, cluster in enumerate(cluster_rows)
+    ]
 
     assignments = pl.DataFrame(
         cluster_assignments,
@@ -218,17 +247,11 @@ def _split_by_cluster(
         for split in SPLIT_FRACTIONS
     }
     for split, split_frame in splits.items():
-        category_summary = ""
-        if category_column is not None:
-            counts = split_frame.group_by(category_column).len()
-            by_category = dict(counts.iter_rows())
-            category_summary = "; " + ", ".join(
-                f"{category}={by_category.get(category, 0):,}" for category in category_names
-            )
+        aoi_count = split_frame[AOI_ID_COL].n_unique()
         print(
             f"[{split}] assigned {split_frame.height:,}/{frame.height:,} eligible records "
-            f"({split_frame.height / frame.height:.1%}; target {SPLIT_FRACTIONS[split]:.1%})"
-            f"{category_summary}"
+            f"({split_frame.height / frame.height:.1%}) and {aoi_count:,}/{int(totals['aois']):,} AOIs "
+            f"({aoi_count / totals['aois']:.1%}); target {SPLIT_FRACTIONS[split]:.1%} for both"
         )
     return splits
 
@@ -254,28 +277,6 @@ def filter_stratification_rule(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def filter_aoi_class_floor(
-    frame: pl.DataFrame,
-    minimum_per_class: int = STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Retain AOIs with enough candidate records in every target class.
-
-    Args:
-        frame: Labeled candidate records.
-        minimum_per_class: Required records in each class for one AOI.
-
-    Returns:
-        Eligible records and an AOI-level class-count audit.
-    """
-    return filter_groups_by_class_count(
-        frame,
-        AOI_ID_COL,
-        DELTA_CATEGORY_COL,
-        CLASS_NAMES,
-        minimum_per_class,
-    )
-
-
 def _filter_metadata_eligibility(frame: pl.DataFrame) -> pl.DataFrame:
     # Apply non-raster candidate quality requirements
     return frame.filter(
@@ -290,49 +291,76 @@ def select_window_records(
     frame: pl.DataFrame,
     split: str,
     *,
+    target_count: int | None = None,
     seed: int = SPLIT_SEED,
 ) -> pl.DataFrame:
-    """Limit steady records while preserving every change record.
+    """Balance training classes or fill a held-out target with steady records.
 
     Args:
         frame: Eligible records carrying start and end NOx means.
         split: Split name used in progress and error messages.
-        seed: Deterministic within-class ordering seed.
+        target_count: Desired held-out size after retaining every change record.
+        seed: Deterministic sampling seed.
 
     Returns:
-        Every increase and decrease plus a weighted steady sample capped at
-        the larger change-class count.
+        A minimum-class-balanced training split or every held-out change record
+        plus a weighted steady sample up to the requested size.
     """
     counts = frame.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
+    count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
+    if split != "train":
+        if target_count is None:
+            raise ValueError(f"[{split}] target_count is required for held-out sampling")
+        if target_count < 0:
+            raise ValueError(f"[{split}] target_count must be nonnegative")
+        change_records = frame.filter(pl.col(DELTA_CATEGORY_COL) != "steady")
+        steady_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == "steady")
+        steady_count = min(steady_records.height, max(target_count - change_records.height, 0))
+        change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
+        center_proximity = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(0.0, 1.0)
+        weight = center_proximity.pow(STEADY_SELECTION_WEIGHT_POWER).clip(
+            lower_bound=MIN_STEADY_SELECTION_WEIGHT,
+            upper_bound=1.0,
+        )
+        selected_steady = deterministic_weighted_sample(
+            steady_records,
+            steady_count,
+            weight,
+            (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp"),
+            seed,
+        )
+        retained = pl.concat((change_records, selected_steady)).sort(AOI_ID_COL, "emissions_hour_utc")
+        retained_counts = retained.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
+        retained_summary = ", ".join(
+            f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in retained_counts.iter_rows(named=True)
+        )
+        print(
+            f"[{split}] eligible {count_summary}; retained {retained_summary}; target={target_count:,}, "
+            f"steady fill={steady_count:,}, total={retained.height:,}"
+        )
+        return retained
+
     missing_classes = set(CLASS_NAMES).difference(counts[DELTA_CATEGORY_COL].to_list())
     if missing_classes:
         raise ValueError(f"[{split}] target classes have no records: {', '.join(sorted(missing_classes))}")
     count_by_class = dict(counts.iter_rows())
-    steady_limit = max(count_by_class["decrease"], count_by_class["increase"])
+    class_limit = min(count_by_class.values())
     selected = []
     identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp")
     for class_name in CLASS_NAMES:
         class_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
-        if class_name == "steady":
-            change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
-            center_proximity = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(0.0, 1.0)
-            weight = center_proximity.pow(STEADY_SELECTION_WEIGHT_POWER).clip(
-                lower_bound=MIN_STEADY_SELECTION_WEIGHT,
-                upper_bound=1.0,
-            )
-            class_records = deterministic_weighted_sample(
-                class_records,
-                steady_limit,
-                weight,
-                identity_columns,
-                seed,
-            )
+        class_records = deterministic_weighted_sample(
+            class_records,
+            class_limit,
+            pl.lit(1.0),
+            identity_columns,
+            seed,
+        )
         selected.append(class_records)
     retained = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
-    count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
     print(
         f"[{split}] threshold={STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; eligible {count_summary}; "
-        f"steady limit={steady_limit:,}; retained {retained.height:,} total"
+        f"minimum-class limit={class_limit:,}; retained {retained.height:,} total"
     )
     return retained
 
@@ -351,6 +379,8 @@ def _plot_stratification_diagnostics(
         trajectory_axis = axes[0, column_index]
         for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
             class_frame = selected.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
+            if class_frame.is_empty():
+                continue
             values = np.column_stack(
                 [class_frame[f"t{index}_nox"].to_numpy() for index in range(SEQUENCE_TIMESTEPS)]
             )
@@ -468,7 +498,7 @@ def _plot_monthly_class_prevalence(splits: dict[str, pl.DataFrame], output_path:
         groups,
         labels,
         "Month",
-        "Monthly class prevalence after balancing",
+        "Monthly class prevalence after split sampling",
         output_path,
     )
 
@@ -492,7 +522,7 @@ def _plot_solar_hour_class_prevalence(splits: dict[str, pl.DataFrame], output_pa
         groups,
         [str(hour) for hour in groups],
         "Local solar hour",
-        "Local-solar-hour class prevalence after balancing",
+        "Local-solar-hour class prevalence after split sampling",
         output_path,
     )
 
@@ -793,14 +823,12 @@ def main() -> None:
         f"Labeled {frame.height:,} records with time-weighted window threshold "
         f"{STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute"
     )
-    frame, class_audit = filter_aoi_class_floor(frame)
-    eligible_aoi_count = class_audit.filter(pl.col("meets_class_floor")).height
-    print(
-        f"Retained {eligible_aoi_count:,}/{class_audit.height:,} selected AOIs with at least "
-        f"{STRATIFICATION_MINIMUM_RECORDS_PER_CLASS} records in every class"
-    )
-    eligible_splits = _split_by_cluster(frame, category_column=DELTA_CATEGORY_COL)
-    splits = {split: select_window_records(split_frame, split) for split, split_frame in eligible_splits.items()}
+    eligible_splits = _split_by_cluster(frame)
+    train = select_window_records(eligible_splits["train"], "train")
+    splits = {"train": train}
+    for split in ("val", "test"):
+        target_count = round(train.height * SPLIT_FRACTIONS[split] / SPLIT_FRACTIONS["train"])
+        splits[split] = select_window_records(eligible_splits[split], split, target_count=target_count)
     _plot_stratification_diagnostics(eligible_splits, splits, args.diagnostic_output)
     _plot_monthly_class_prevalence(splits, args.monthly_prevalence_output)
     _plot_solar_hour_class_prevalence(splits, args.solar_hour_prevalence_output)
