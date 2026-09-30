@@ -102,7 +102,8 @@ changes. Do not regenerate while a model job reads the dataset.
 Workers require at least 85% finite NO2 coverage at each timestep. The
 finalizer publishes split CSVs only after it validates all shard outcomes. It
 does not rebalance after raster filtering, and emails a plot of the surviving
-emissions trajectories by class and split. See [regridding.md](regridding.md).
+emissions trajectories and exact class counts by split. See
+[regridding.md](regridding.md).
 
 ## 4. Compute AOI-specific NO2 normalization
 

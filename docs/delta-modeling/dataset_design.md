@@ -51,8 +51,8 @@ The pipeline applies these steps in order:
 9. Generate rasters and reject records that fail coverage or source-file checks.
 
 Raster quality control can change class counts after stratification. The
-finalizer emails the retained class trajectories and does not rebalance the
-surviving records.
+finalizer emails the retained class trajectories and exact split-by-class
+counts. It does not rebalance the surviving records.
 
 ## Label construction
 

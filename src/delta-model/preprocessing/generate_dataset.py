@@ -565,11 +565,11 @@ def _post_filter_diagnostic_path() -> Path:
 
 
 def _plot_post_filter_window_behavior(splits: dict[str, pl.DataFrame], output_path: Path) -> None:
-    # Plot emissions trajectories for records that survived raster filtering
-    figure, raw_axes = plt.subplots(1, len(splits), figsize=(16, 4.8), constrained_layout=True)
-    axes = [raw_axes] if len(splits) == 1 else list(raw_axes)
+    # Plot retained emissions trajectories and exact class counts
+    figure, axes = plt.subplots(2, len(splits), figsize=(16, 8.5), squeeze=False, constrained_layout=True)
     positions = np.arange(SEQUENCE_TIMESTEPS)
-    for column_index, ((split_name, frame), axis) in enumerate(zip(splits.items(), axes, strict=True)):
+    for column_index, (split_name, frame) in enumerate(splits.items()):
+        trajectory_axis = axes[0, column_index]
         for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
             class_frame = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
             if class_frame.is_empty():
@@ -579,21 +579,31 @@ def _plot_post_filter_window_behavior(splits: dict[str, pl.DataFrame], output_pa
             )
             median = np.median(values, axis=0)
             lower, upper = np.quantile(values, (0.25, 0.75), axis=0)
-            axis.plot(positions, median, marker="o", color=color, label=class_name.title())
-            axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
-        axis.set(
+            trajectory_axis.plot(positions, median, marker="o", color=color, label=class_name.title())
+            trajectory_axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
+        trajectory_axis.set(
             title=f"{split_name.title()}: {frame.height:,} records, {frame['aoi_id'].n_unique():,} AOIs",
             xlabel="TEMPO timestep",
             ylabel="Interpolated NOx (lb/hr)",
             xticks=positions,
             xticklabels=[f"t{index}" for index in positions],
         )
-        axis.grid(alpha=0.2)
+        trajectory_axis.grid(alpha=0.2)
         if column_index == 0:
-            axis.legend()
+            trajectory_axis.legend()
+
+        class_counts = dict(frame.group_by(DELTA_CATEGORY_COL).len().iter_rows())
+        retained_counts = np.array([class_counts.get(class_name, 0) for class_name in CLASS_NAMES])
+        count_axis = axes[1, column_index]
+        bars = count_axis.bar(CLASS_NAMES, retained_counts, color=CLASS_COLORS)
+        count_axis.bar_label(bars, labels=[f"{count:,}" for count in retained_counts], padding=3)
+        count_axis.set(title="Retained records by class", ylabel="Records")
+        count_axis.margins(y=0.12)
+        count_axis.grid(axis="y", alpha=0.2)
     figure.suptitle(
-        "Five-timestep emissions behavior after raster filtering\n"
-        f"Threshold: {STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; lines show median and IQR"
+        "Five-timestep emissions behavior and class counts after raster filtering\n"
+        f"Threshold: {STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; lines show median and IQR; "
+        "bars show exact counts"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=180)
