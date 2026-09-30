@@ -28,10 +28,10 @@ from preprocessing.stratify_utils import (
     cluster_aois,
     deterministic_weighted_sample,
     filter_usable_nox_measurements,
+    optimize_cluster_assignments,
     usable_nox_measurement_expr,
 )
 from preprocessing.tempo_mapping import load_tempo_mapping
-from scipy.optimize import Bounds, LinearConstraint, milp
 
 from config import (
     FULL_DATA_PARQUET,
@@ -151,84 +151,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _optimize_cluster_assignments(
-    cluster_counts: pl.DataFrame,
-    split_fractions: dict[str, float],
-    target_columns: tuple[str, ...],
-) -> pl.DataFrame:
-    # Assign indivisible clusters by minimizing normalized target deviations
-    if cluster_counts.height < len(split_fractions):
-        raise ValueError(f"At least {len(split_fractions)} geographic clusters are required")
-    split_names = tuple(split_fractions)
-    totals = {column: float(cluster_counts[column].sum()) for column in target_columns}
-    targets = {
-        split: {column: totals[column] * fraction for column in target_columns}
-        for split, fraction in split_fractions.items()
-    }
-    cluster_rows = list(cluster_counts.iter_rows(named=True))
-    cluster_count = len(cluster_rows)
-    split_count = len(split_names)
-    metric_count = len(target_columns)
-    assignment_variable_count = cluster_count * split_count
-    variable_count = assignment_variable_count + split_count * metric_count
-    objective = np.zeros(variable_count, dtype=np.float64)
-    objective[assignment_variable_count:] = 1.0
-    integrality = np.zeros(variable_count, dtype=np.uint8)
-    integrality[:assignment_variable_count] = 1
-    lower_bounds = np.zeros(variable_count, dtype=np.float64)
-    upper_bounds = np.full(variable_count, np.inf, dtype=np.float64)
-    upper_bounds[:assignment_variable_count] = 1.0
-
-    constraint_count = cluster_count + split_count + 2 * split_count * metric_count
-    coefficients = np.zeros((constraint_count, variable_count), dtype=np.float64)
-    constraint_lower = np.full(constraint_count, -np.inf, dtype=np.float64)
-    constraint_upper = np.full(constraint_count, np.inf, dtype=np.float64)
-    constraint_index = 0
-    for cluster_index in range(cluster_count):
-        start = cluster_index * split_count
-        coefficients[constraint_index, start : start + split_count] = 1.0
-        constraint_lower[constraint_index] = 1.0
-        constraint_upper[constraint_index] = 1.0
-        constraint_index += 1
-    for split_index in range(split_count):
-        coefficients[constraint_index, split_index:assignment_variable_count:split_count] = 1.0
-        constraint_lower[constraint_index] = 1.0
-        constraint_index += 1
-    for split_index, split in enumerate(split_names):
-        for metric_index, column in enumerate(target_columns):
-            deviation_index = assignment_variable_count + split_index * metric_count + metric_index
-            normalized_values = np.array(
-                [float(cluster[column]) / max(targets[split][column], 1.0) for cluster in cluster_rows]
-            )
-            assignment_indices = np.arange(split_index, assignment_variable_count, split_count)
-            coefficients[constraint_index, assignment_indices] = normalized_values
-            coefficients[constraint_index, deviation_index] = -1.0
-            constraint_upper[constraint_index] = 1.0
-            constraint_index += 1
-            coefficients[constraint_index, assignment_indices] = -normalized_values
-            coefficients[constraint_index, deviation_index] = -1.0
-            constraint_upper[constraint_index] = -1.0
-            constraint_index += 1
-
-    result = milp(
-        objective,
-        integrality=integrality,
-        bounds=Bounds(lower_bounds, upper_bounds),
-        constraints=LinearConstraint(coefficients, constraint_lower, constraint_upper),
-        options={"time_limit": 120.0, "mip_rel_gap": 0.0},
-    )
-    if not result.success or result.x is None:
-        raise RuntimeError(f"Geographic split optimization failed: {result.message}")
-    decisions = result.x[:assignment_variable_count].reshape(cluster_count, split_count)
-    return pl.DataFrame(
-        [
-            {"cluster": cluster["cluster"], "split": split_names[int(np.argmax(decisions[index]))]}
-            for index, cluster in enumerate(cluster_rows)
-        ],
-        schema={"cluster": cluster_counts.schema["cluster"], "split": pl.String},
-    )
-
-
 def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
     # Preserve the training allocation before class-balancing held-out clusters
     cluster_counts = (
@@ -244,7 +166,7 @@ def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
         .with_columns(pl.col("cluster").hash(seed=SPLIT_SEED).alias("_tie_breaker"))
         .sort(["records", "_tie_breaker"], descending=[True, False])
     )
-    initial_assignments = _optimize_cluster_assignments(
+    initial_assignments = optimize_cluster_assignments(
         cluster_counts,
         SPLIT_FRACTIONS,
         ("records", "aois"),
@@ -255,7 +177,7 @@ def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
         on="cluster",
         how="inner",
     )
-    held_out_assignments = _optimize_cluster_assignments(
+    held_out_assignments = optimize_cluster_assignments(
         held_out_counts,
         {"val": 0.5, "test": 0.5},
         ("records", "aois", *CLASS_NAMES),
