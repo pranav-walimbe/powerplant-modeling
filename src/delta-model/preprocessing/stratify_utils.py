@@ -33,7 +33,6 @@ POPULATED_PLACES_PATH = Path(
     "/global/scratch/projects/fc_nitrates/ddp/nox/reference/ne_10m_populated_places_simple.zip"
 )
 HASH_MODULUS = 1_000_000_007
-SPLIT_OPTIMIZATION_TIME_LIMIT_SECONDS = 120.0
 
 
 def load_major_cities(path: Path = POPULATED_PLACES_PATH) -> pl.DataFrame:
@@ -766,7 +765,7 @@ def optimize_cluster_assignments(
         integrality=integrality,
         bounds=Bounds(lower_bounds, upper_bounds),
         constraints=LinearConstraint(coefficients, constraint_lower, constraint_upper),
-        options={"time_limit": SPLIT_OPTIMIZATION_TIME_LIMIT_SECONDS, "mip_rel_gap": 0.0},
+        options={"mip_rel_gap": 0.0},
     )
     if not result.success or result.x is None:
         raise RuntimeError(f"Geographic split optimization failed: {result.message}")
