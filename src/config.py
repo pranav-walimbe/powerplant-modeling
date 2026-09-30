@@ -52,7 +52,6 @@ TARGET_LABEL_MODE = "overlap_weighted"  # interpolate CAMPD hours over each TEMP
 MIN_CITY_POPULATION = 500000  # metro population a populated place needs to count as a major city
 STRAT_BASE_DIR = "/global/scratch/projects/fc_nitrates/ddp/nox/nox_powerplant_data"  # stratified split output directory
 STRATIFICATION_WINDOW_THRESHOLD = 250.0  # early-to-late mean change required for a change label
-STRATIFICATION_MINIMUM_RECORDS_PER_CLASS = 20  # per-AOI candidate floor before geographic splitting
 STRATIFICATION_AOI_FRACTION = 0.50  # highest active-median-NOx share of mapped AOIs
 TRAIN_RECORDS_CSV = os.path.join(STRAT_BASE_DIR, "train_records.csv")  # train split metadata
 VAL_RECORDS_CSV = os.path.join(STRAT_BASE_DIR, "val_records.csv")  # validation split metadata
@@ -94,7 +93,7 @@ DATASET_MAX_PARALLEL_SHARDS = 8  # maximum concurrently running Slurm shard task
 DATASET_WORKERS_PER_SHARD = 8  # process workers and CPUs assigned to each shard task
 IMG_SIZE = 24  # image size in pixels (24x24)
 MIN_PIXEL_CLOUD = 0.20  # TEMPO cloud fraction threshold per pixel
-MIN_TIMESTEP_NO2_FINITE_FRACTION = 0.90  # inclusive coverage floor applied independently to every timestep
+MIN_TIMESTEP_NO2_FINITE_FRACTION = 0.85  # inclusive coverage floor applied independently to every timestep
 
 # ============================================================================
 # Delta-model training contract

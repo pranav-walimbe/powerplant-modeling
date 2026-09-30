@@ -3,7 +3,6 @@
 #SBATCH --account=fc_nitrates
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
-#SBATCH --constraint=savio4_m512
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -80,13 +79,12 @@ printf '%s\n' \
     'Five-timestep window stratification completed successfully.' \
     'Selected the half of AOIs with the highest activity-conditioned median NOx.' \
     'Change threshold: 250 lb/hr absolute.' \
-    'Eligible AOIs provide at least 20 candidates in decrease, steady, and increase.' \
-    'Steady-class downsampling uses an eighth-power bias toward changes nearest zero.' \
-    'Increase and decrease use deterministic random samples.' \
     'Five causal rasters retained; labels compare time-weighted t0-t2 and t2-t4 averages.' \
     'Each timestep NOx value is linearly interpolated between its surrounding CAMPD hours.' \
-    'Filtered AOI clusters were assigned by class to approximately 70/15/15 splits.' \
-    'Every split is independently balanced across decrease, steady, and increase.' \
+    'Geographic AOI clusters were assigned by AOI and candidate-record counts to approximately 70/15/15 splits.' \
+    'Validation and test class contributions are balanced during geographic assignment.' \
+    'Training classes are downsampled to the smallest training class with a fixed seed.' \
+    'Validation and test retain every change record, then uniformly sample steady to match the larger change class.' \
     "Train: ${train_records} records" \
     "Validation: ${val_records} records" \
     "Test: ${test_records} records" \

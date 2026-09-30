@@ -27,8 +27,8 @@ from preprocessing.stratify_utils import (
     calculate_operating_aoi_characteristics,
     cluster_aois,
     deterministic_weighted_sample,
-    filter_groups_by_class_count,
     filter_usable_nox_measurements,
+    optimize_cluster_assignments,
     usable_nox_measurement_expr,
 )
 from preprocessing.tempo_mapping import load_tempo_mapping
@@ -38,7 +38,6 @@ from config import (
     SEQUENCE_TIMESTEPS,
     STRAT_BASE_DIR,
     STRATIFICATION_AOI_FRACTION,
-    STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
     STRATIFICATION_WINDOW_THRESHOLD,
     TEST_RECORDS_CSV,
     TRAIN_RECORDS_CSV,
@@ -48,8 +47,6 @@ from config import (
 
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
 SPLIT_SEED = 42
-STEADY_SELECTION_WEIGHT_POWER = 8.0
-MIN_STEADY_SELECTION_WEIGHT = 1e-9
 DELTA_CATEGORY_COL = "delta_category"
 AOI_SCORE_COL = "aoi_score"
 AOI_SCORE_PERCENTILE_COL = "aoi_score_percentile"
@@ -154,61 +151,38 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _split_by_cluster(
-    frame: pl.DataFrame,
-    category_column: str | None = None,
-) -> dict[str, pl.DataFrame]:
-    # Greedily assign large clusters against record or class-specific targets
-    category_names = CLASS_NAMES if category_column is not None else ()
-    count_expressions = [pl.len().alias("records")]
-    count_expressions.extend((pl.col(category_column) == category).sum().alias(category) for category in category_names)
+def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    # Preserve the training allocation before class-balancing held-out clusters
     cluster_counts = (
         frame.group_by("cluster")
-        .agg(count_expressions)
+        .agg(
+            pl.len().alias("records"),
+            pl.col(AOI_ID_COL).n_unique().alias("aois"),
+            *[
+                (pl.col(DELTA_CATEGORY_COL) == class_name).sum().alias(class_name)
+                for class_name in CLASS_NAMES
+            ],
+        )
         .with_columns(pl.col("cluster").hash(seed=SPLIT_SEED).alias("_tie_breaker"))
         .sort(["records", "_tie_breaker"], descending=[True, False])
     )
-    if cluster_counts.height < len(SPLIT_FRACTIONS):
-        raise ValueError("At least three geographic clusters are required")
-
-    target_columns = category_names or ("records",)
-    totals = {column: float(cluster_counts[column].sum()) for column in target_columns}
-    targets = {
-        split: {column: totals[column] * fraction for column in target_columns}
-        for split, fraction in SPLIT_FRACTIONS.items()
-    }
-    assigned = {split: {column: 0.0 for column in target_columns} for split in SPLIT_FRACTIONS}
-    cluster_assignments: list[dict[str, object]] = []
-    assigned_cluster_counts = {split: 0 for split in SPLIT_FRACTIONS}
-    for index, cluster in enumerate(cluster_counts.iter_rows(named=True)):
-        empty_splits = [split for split, count in assigned_cluster_counts.items() if count == 0]
-        remaining_clusters = cluster_counts.height - index
-        destinations = empty_splits if remaining_clusters == len(empty_splits) else SPLIT_FRACTIONS
-        destination = min(
-            destinations,
-            key=lambda destination: sum(
-                (
-                    (
-                        assigned[split][column]
-                        + (float(cluster[column]) if split == destination else 0.0)
-                        - targets[split][column]
-                    )
-                    / max(targets[split][column], 1.0)
-                )
-                ** 2
-                for split in SPLIT_FRACTIONS
-                for column in target_columns
-            ),
-        )
-        cluster_assignments.append({"cluster": cluster["cluster"], "split": destination})
-        assigned_cluster_counts[destination] += 1
-        for column in target_columns:
-            assigned[destination][column] += float(cluster[column])
-
-    assignments = pl.DataFrame(
-        cluster_assignments,
-        schema={"cluster": frame.schema["cluster"], "split": pl.String},
+    initial_assignments = optimize_cluster_assignments(
+        cluster_counts,
+        SPLIT_FRACTIONS,
+        ("records", "aois"),
     )
+    train_assignments = initial_assignments.filter(pl.col("split") == "train")
+    held_out_counts = cluster_counts.join(
+        initial_assignments.filter(pl.col("split") != "train").select("cluster"),
+        on="cluster",
+        how="inner",
+    )
+    held_out_assignments = optimize_cluster_assignments(
+        held_out_counts,
+        {"val": 0.5, "test": 0.5},
+        ("records", "aois", *CLASS_NAMES),
+    )
+    assignments = pl.concat((train_assignments, held_out_assignments))
     splits = {
         split: frame.join(
             assignments.filter(pl.col("split") == split).select("cluster"),
@@ -217,18 +191,15 @@ def _split_by_cluster(
         )
         for split in SPLIT_FRACTIONS
     }
+    total_aois = float(cluster_counts["aois"].sum())
     for split, split_frame in splits.items():
-        category_summary = ""
-        if category_column is not None:
-            counts = split_frame.group_by(category_column).len()
-            by_category = dict(counts.iter_rows())
-            category_summary = "; " + ", ".join(
-                f"{category}={by_category.get(category, 0):,}" for category in category_names
-            )
+        aoi_count = split_frame[AOI_ID_COL].n_unique()
+        class_counts = dict(split_frame.group_by(DELTA_CATEGORY_COL).len().iter_rows())
+        class_summary = ", ".join(f"{name}={class_counts.get(name, 0):,}" for name in CLASS_NAMES)
         print(
             f"[{split}] assigned {split_frame.height:,}/{frame.height:,} eligible records "
-            f"({split_frame.height / frame.height:.1%}; target {SPLIT_FRACTIONS[split]:.1%})"
-            f"{category_summary}"
+            f"({split_frame.height / frame.height:.1%}) and {aoi_count:,}/{int(total_aois):,} AOIs "
+            f"({aoi_count / total_aois:.1%}); target {SPLIT_FRACTIONS[split]:.1%} for both; {class_summary}"
         )
     return splits
 
@@ -254,28 +225,6 @@ def filter_stratification_rule(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def filter_aoi_class_floor(
-    frame: pl.DataFrame,
-    minimum_per_class: int = STRATIFICATION_MINIMUM_RECORDS_PER_CLASS,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Retain AOIs with enough candidate records in every target class.
-
-    Args:
-        frame: Labeled candidate records.
-        minimum_per_class: Required records in each class for one AOI.
-
-    Returns:
-        Eligible records and an AOI-level class-count audit.
-    """
-    return filter_groups_by_class_count(
-        frame,
-        AOI_ID_COL,
-        DELTA_CATEGORY_COL,
-        CLASS_NAMES,
-        minimum_per_class,
-    )
-
-
 def _filter_metadata_eligibility(frame: pl.DataFrame) -> pl.DataFrame:
     # Apply non-raster candidate quality requirements
     return frame.filter(
@@ -286,65 +235,76 @@ def _filter_metadata_eligibility(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def select_balanced_window_records(
+def select_window_records(
     frame: pl.DataFrame,
     split: str,
     *,
     seed: int = SPLIT_SEED,
 ) -> pl.DataFrame:
-    """Select equal deterministic samples from the three window-change classes.
+    """Balance training classes or cap held-out steady records.
 
     Args:
         frame: Eligible records carrying start and end NOx means.
         split: Split name used in progress and error messages.
-        seed: Deterministic within-class ordering seed.
+        seed: Deterministic sampling seed.
 
     Returns:
-        All three buckets downsampled to the smallest bucket count.
+        A minimum-class-balanced training split or every held-out change record
+        plus a uniform steady sample matching the larger change class.
     """
     counts = frame.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
+    count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
+    if split != "train":
+        count_by_class = dict(counts.iter_rows())
+        change_records = frame.filter(pl.col(DELTA_CATEGORY_COL) != "steady")
+        steady_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == "steady")
+        steady_limit = max(count_by_class.get("decrease", 0), count_by_class.get("increase", 0))
+        selected_steady = deterministic_weighted_sample(
+            steady_records,
+            steady_limit,
+            pl.lit(1.0),
+            (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp"),
+            seed,
+        )
+        retained = pl.concat((change_records, selected_steady)).sort(AOI_ID_COL, "emissions_hour_utc")
+        retained_counts = retained.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
+        retained_summary = ", ".join(
+            f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in retained_counts.iter_rows(named=True)
+        )
+        print(
+            f"[{split}] eligible {count_summary}; retained {retained_summary}; "
+            f"steady limit={steady_limit:,}, total={retained.height:,}"
+        )
+        return retained
+
     missing_classes = set(CLASS_NAMES).difference(counts[DELTA_CATEGORY_COL].to_list())
     if missing_classes:
         raise ValueError(f"[{split}] target classes have no records: {', '.join(sorted(missing_classes))}")
-    records_per_class = int(counts["len"].min())
+    count_by_class = dict(counts.iter_rows())
+    class_limit = min(count_by_class.values())
     selected = []
     identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp")
     for class_name in CLASS_NAMES:
         class_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
-        if class_name == "steady":
-            change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
-            center_proximity = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(0.0, 1.0)
-            weight = center_proximity.pow(STEADY_SELECTION_WEIGHT_POWER).clip(
-                lower_bound=MIN_STEADY_SELECTION_WEIGHT,
-                upper_bound=1.0,
-            )
-            class_records = deterministic_weighted_sample(
-                class_records,
-                records_per_class,
-                weight,
-                identity_columns,
-                seed,
-            )
-        else:
-            class_records = (
-                class_records.with_columns(pl.struct(*identity_columns).hash(seed=seed).alias("_selection_tie_breaker"))
-                .sort("_selection_tie_breaker", *identity_columns)
-                .head(records_per_class)
-                .drop("_selection_tie_breaker")
-            )
+        class_records = deterministic_weighted_sample(
+            class_records,
+            class_limit,
+            pl.lit(1.0),
+            identity_columns,
+            seed,
+        )
         selected.append(class_records)
-    balanced = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
-    count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
+    retained = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
     print(
         f"[{split}] threshold={STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; eligible {count_summary}; "
-        f"selected {records_per_class:,} per class ({balanced.height:,} total)"
+        f"minimum-class limit={class_limit:,}; retained {retained.height:,} total"
     )
-    return balanced
+    return retained
 
 
 def _plot_stratification_diagnostics(
     eligible_splits: dict[str, pl.DataFrame],
-    balanced_splits: dict[str, pl.DataFrame],
+    selected_splits: dict[str, pl.DataFrame],
     output_path: Path,
 ) -> None:
     # Show class-specific emissions trajectories and split composition
@@ -352,10 +312,12 @@ def _plot_stratification_diagnostics(
     figure, axes = plt.subplots(2, 3, figsize=(16, 9), constrained_layout=True)
     for column_index, split_name in enumerate(split_names):
         eligible = eligible_splits[split_name]
-        balanced = balanced_splits[split_name]
+        selected = selected_splits[split_name]
         trajectory_axis = axes[0, column_index]
         for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
-            class_frame = balanced.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
+            class_frame = selected.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
+            if class_frame.is_empty():
+                continue
             values = np.column_stack(
                 [class_frame[f"t{index}_nox"].to_numpy() for index in range(SEQUENCE_TIMESTEPS)]
             )
@@ -365,7 +327,7 @@ def _plot_stratification_diagnostics(
             trajectory_axis.plot(positions, median, marker="o", color=color, label=class_name.title())
             trajectory_axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
         trajectory_axis.set(
-            title=f"{split_name.title()}: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs",
+            title=f"{split_name.title()}: {selected.height:,} records, {selected[AOI_ID_COL].n_unique():,} AOIs",
             xlabel="TEMPO timestep",
             ylabel="Interpolated NOx (lb/hr)",
             xticks=range(SEQUENCE_TIMESTEPS),
@@ -377,8 +339,8 @@ def _plot_stratification_diagnostics(
 
         category_counts = dict(eligible.group_by(DELTA_CATEGORY_COL).len().iter_rows())
         eligible_counts = np.array([category_counts.get(category, 0) for category in CLASS_NAMES])
-        balanced_count = balanced.height // len(CLASS_NAMES)
-        balanced_counts = np.full(len(CLASS_NAMES), balanced_count)
+        selected_count_by_class = dict(selected.group_by(DELTA_CATEGORY_COL).len().iter_rows())
+        selected_counts = np.array([selected_count_by_class.get(category, 0) for category in CLASS_NAMES])
         positions = np.arange(len(CLASS_NAMES))
         width = 0.38
         bucket_axis = axes[1, column_index]
@@ -392,9 +354,9 @@ def _plot_stratification_diagnostics(
         )
         after_bars = bucket_axis.bar(
             positions + width / 2,
-            balanced_counts,
+            selected_counts,
             width,
-            label="Balanced",
+            label="Selected",
             color=CLASS_COLORS,
         )
         bucket_axis.set_xticks(positions, CLASS_NAMES)
@@ -402,10 +364,10 @@ def _plot_stratification_diagnostics(
         bucket_axis.grid(axis="y", alpha=0.2)
         bucket_axis.set_title(
             f"Eligible: {eligible.height:,} records, {eligible[AOI_ID_COL].n_unique():,} AOIs\n"
-            f"Balanced: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs"
+            f"Selected: {selected.height:,} records, {selected[AOI_ID_COL].n_unique():,} AOIs"
         )
         bucket_axis.bar_label(before_bars, labels=[f"{count:,}" for count in eligible_counts], fontsize=8)
-        bucket_axis.bar_label(after_bars, labels=[f"{count:,}" for count in balanced_counts], fontsize=8)
+        bucket_axis.bar_label(after_bars, labels=[f"{count:,}" for count in selected_counts], fontsize=8)
         if column_index == 0:
             bucket_axis.legend(loc="upper left")
     figure.suptitle(
@@ -473,7 +435,7 @@ def _plot_monthly_class_prevalence(splits: dict[str, pl.DataFrame], output_path:
         groups,
         labels,
         "Month",
-        "Monthly class prevalence after balancing",
+        "Monthly class prevalence after split sampling",
         output_path,
     )
 
@@ -497,7 +459,7 @@ def _plot_solar_hour_class_prevalence(splits: dict[str, pl.DataFrame], output_pa
         groups,
         [str(hour) for hour in groups],
         "Local solar hour",
-        "Local-solar-hour class prevalence after balancing",
+        "Local-solar-hour class prevalence after split sampling",
         output_path,
     )
 
@@ -798,16 +760,8 @@ def main() -> None:
         f"Labeled {frame.height:,} records with time-weighted window threshold "
         f"{STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute"
     )
-    frame, class_audit = filter_aoi_class_floor(frame)
-    eligible_aoi_count = class_audit.filter(pl.col("meets_class_floor")).height
-    print(
-        f"Retained {eligible_aoi_count:,}/{class_audit.height:,} selected AOIs with at least "
-        f"{STRATIFICATION_MINIMUM_RECORDS_PER_CLASS} records in every class"
-    )
-    eligible_splits = _split_by_cluster(frame, category_column=DELTA_CATEGORY_COL)
-    splits = {
-        split: select_balanced_window_records(split_frame, split) for split, split_frame in eligible_splits.items()
-    }
+    eligible_splits = _split_by_cluster(frame)
+    splits = {split: select_window_records(split_frame, split) for split, split_frame in eligible_splits.items()}
     _plot_stratification_diagnostics(eligible_splits, splits, args.diagnostic_output)
     _plot_monthly_class_prevalence(splits, args.monthly_prevalence_output)
     _plot_solar_hour_class_prevalence(splits, args.solar_hour_prevalence_output)

@@ -8,6 +8,7 @@ import polars as pl
 import shapely
 from pycanopy import SpatialFrame, distance_to_point
 from pyproj import Transformer
+from scipy.optimize import Bounds, LinearConstraint, milp
 
 from config import (
     IMG_RANGE,
@@ -491,36 +492,6 @@ def calculate_operating_aoi_characteristics(
     )
 
 
-def filter_groups_by_class_count(
-    frame: pl.DataFrame,
-    group_column: str,
-    class_column: str,
-    class_names: tuple[str, ...],
-    minimum_per_class: int,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Retain groups meeting a record minimum in every requested class.
-
-    Args:
-        frame: Labeled records.
-        group_column: Column identifying one group.
-        class_column: Column carrying class names.
-        class_names: Classes required in every retained group.
-        minimum_per_class: Required records for each class.
-
-    Returns:
-        Eligible records and a group-level class-count audit.
-    """
-    counts = (
-        frame.group_by(group_column)
-        .agg(*[(pl.col(class_column) == name).sum().alias(f"{name}_records") for name in class_names])
-        .with_columns(pl.min_horizontal(*(f"{name}_records" for name in class_names)).alias("minimum_class_records"))
-        .with_columns((pl.col("minimum_class_records") >= minimum_per_class).alias("meets_class_floor"))
-        .sort(group_column)
-    )
-    eligible_groups = counts.filter(pl.col("meets_class_floor")).select(group_column)
-    return frame.join(eligible_groups, on=group_column, how="inner"), counts
-
-
 def deterministic_weighted_sample(
     frame: pl.DataFrame,
     count: int,
@@ -717,6 +688,94 @@ def cluster_aois(
             AOI_ID_COL: list(parents),
             "cluster": [cluster_by_root[find(aoi_id)] for aoi_id in parents],
         }
+    )
+
+
+def optimize_cluster_assignments(
+    cluster_counts: pl.DataFrame,
+    split_fractions: dict[str, float],
+    target_columns: tuple[str, ...],
+) -> pl.DataFrame:
+    """Assign geographic clusters by minimizing normalized target deviations.
+
+    Args:
+        cluster_counts: One row per cluster with a ``cluster`` identifier and
+            numeric target columns.
+        split_fractions: Ordered split names and desired fractions.
+        target_columns: Count columns to balance across the splits.
+
+    Returns:
+        One split assignment for each cluster.
+    """
+    if cluster_counts.height < len(split_fractions):
+        raise ValueError(f"At least {len(split_fractions)} geographic clusters are required")
+    split_names = tuple(split_fractions)
+    totals = {column: float(cluster_counts[column].sum()) for column in target_columns}
+    targets = {
+        split: {column: totals[column] * fraction for column in target_columns}
+        for split, fraction in split_fractions.items()
+    }
+    cluster_rows = list(cluster_counts.iter_rows(named=True))
+    cluster_count = len(cluster_rows)
+    split_count = len(split_names)
+    metric_count = len(target_columns)
+    assignment_variable_count = cluster_count * split_count
+    variable_count = assignment_variable_count + split_count * metric_count
+    objective = np.zeros(variable_count, dtype=np.float64)
+    objective[assignment_variable_count:] = 1.0
+    integrality = np.zeros(variable_count, dtype=np.uint8)
+    integrality[:assignment_variable_count] = 1
+    lower_bounds = np.zeros(variable_count, dtype=np.float64)
+    upper_bounds = np.full(variable_count, np.inf, dtype=np.float64)
+    upper_bounds[:assignment_variable_count] = 1.0
+
+    constraint_count = cluster_count + split_count + 2 * split_count * metric_count
+    coefficients = np.zeros((constraint_count, variable_count), dtype=np.float64)
+    constraint_lower = np.full(constraint_count, -np.inf, dtype=np.float64)
+    constraint_upper = np.full(constraint_count, np.inf, dtype=np.float64)
+    constraint_index = 0
+    for cluster_index in range(cluster_count):
+        start = cluster_index * split_count
+        coefficients[constraint_index, start : start + split_count] = 1.0
+        constraint_lower[constraint_index] = 1.0
+        constraint_upper[constraint_index] = 1.0
+        constraint_index += 1
+    for split_index in range(split_count):
+        coefficients[constraint_index, split_index:assignment_variable_count:split_count] = 1.0
+        constraint_lower[constraint_index] = 1.0
+        constraint_index += 1
+    for split_index, split in enumerate(split_names):
+        for metric_index, column in enumerate(target_columns):
+            deviation_index = assignment_variable_count + split_index * metric_count + metric_index
+            normalized_values = np.array(
+                [float(cluster[column]) / max(targets[split][column], 1.0) for cluster in cluster_rows]
+            )
+            assignment_indices = np.arange(split_index, assignment_variable_count, split_count)
+            coefficients[constraint_index, assignment_indices] = normalized_values
+            coefficients[constraint_index, deviation_index] = -1.0
+            constraint_upper[constraint_index] = 1.0
+            constraint_index += 1
+            coefficients[constraint_index, assignment_indices] = -normalized_values
+            coefficients[constraint_index, deviation_index] = -1.0
+            constraint_upper[constraint_index] = -1.0
+            constraint_index += 1
+
+    result = milp(
+        objective,
+        integrality=integrality,
+        bounds=Bounds(lower_bounds, upper_bounds),
+        constraints=LinearConstraint(coefficients, constraint_lower, constraint_upper),
+        options={"mip_rel_gap": 0.0},
+    )
+    if not result.success or result.x is None:
+        raise RuntimeError(f"Geographic split optimization failed: {result.message}")
+    decisions = result.x[:assignment_variable_count].reshape(cluster_count, split_count)
+    return pl.DataFrame(
+        [
+            {"cluster": cluster["cluster"], "split": split_names[int(np.argmax(decisions[index]))]}
+            for index, cluster in enumerate(cluster_rows)
+        ],
+        schema={"cluster": cluster_counts.schema["cluster"], "split": pl.String},
     )
 
 

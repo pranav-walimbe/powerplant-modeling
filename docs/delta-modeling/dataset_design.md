@@ -10,9 +10,9 @@ three-class emissions-change label for a 72 km area of interest (AOI).
 | Target column | `delta_category` |
 | Classes | `decrease`, `steady`, `increase` |
 | Split unit | Cluster of overlapping 72 km AOIs |
-| Split target | About 70% train, 15% validation, 15% test within each class |
-| Metadata sampling | Equal class counts within each split before raster quality control |
-| Raster quality | At least 90% finite NO2 per timestep |
+| Split target | About 70% train by AOIs and records; class parity between validation and test |
+| Metadata sampling | Balance training; retain held-out changes and cap steady at the larger change class |
+| Raster quality | At least 85% finite NO2 per timestep |
 | Model selection | Validation split only; test remains frozen |
 
 ## Record selection
@@ -38,19 +38,21 @@ The pipeline applies these steps in order:
    and `t2` through `t4`. Store them as `avg_nox_start` and `avg_nox_end`.
 6. Assign classes from `avg_nox_end - avg_nox_start` using a 250 lb/hr
    absolute threshold.
-7. Retain only AOIs providing at least 20 candidate records in every class.
-8. Assign each overlap cluster to one split with a deterministic procedure that
-   targets the 70/15/15 ratio for each class.
-9. Downsample each class to the smallest class count within its split. Use
-   deterministic weighted sampling for steady records with weight
-   `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily favors
-   records nearest zero change. Sample increase and decrease records by
-   deterministic random order.
-10. Generate rasters and reject records that fail coverage or source-file checks.
+7. Assign each overlap cluster to one split with a deterministic optimization
+   targeting the 70/15/15 ratio for both AOIs and candidate records. Freeze the
+   resulting training clusters, then repartition the remaining clusters between
+   validation and test using AOI, record, decrease, steady, and increase counts.
+   This preserves the training-heavy allocation while making the held-out sets
+   comparable after sampling.
+8. Downsample each training class to the smallest training-class count with a
+   fixed seed. For validation and test, retain every increase and decrease
+   record, then uniformly sample steady records until their count matches the
+   larger held-out change class. Use a fixed seed for reproducibility.
+9. Generate rasters and reject records that fail coverage or source-file checks.
 
-Raster quality control can change class counts after balancing. The finalizer
-reports those counts, emails the retained class trajectories, and does not
-rebalance the retained records.
+Raster quality control can change class counts after stratification. The
+finalizer emails the retained class trajectories and exact split-by-class
+counts. It does not rebalance the surviving records.
 
 ## Label construction
 
@@ -103,7 +105,7 @@ fraction is at most 0.20, its value and geometry are valid, and its footprint
 overlaps an output cell. Missing cells remain `NaN` in the stored raster and
 zero in `no2_mask`.
 
-Each timestep needs at least 90% finite NO2 cells. A 3 by 3 window around the
+Each timestep needs at least 85% finite NO2 cells. A 3 by 3 window around the
 cell with the largest modeled-unit count needs full support. Unit-weighted
 distance to the AOI center breaks source-cell ties.
 
