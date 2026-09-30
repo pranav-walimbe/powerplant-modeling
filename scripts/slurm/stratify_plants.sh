@@ -84,7 +84,7 @@ printf '%s\n' \
     'Each timestep NOx value is linearly interpolated between its surrounding CAMPD hours.' \
     'Geographic AOI clusters were assigned by AOI and candidate-record counts to approximately 70/15/15 splits.' \
     'Training classes are downsampled to the smallest training class with a fixed seed.' \
-    'Validation and test retain every change record, then use near-zero-weighted steady records to reach their targets.' \
+    'Validation and test retain every change record, then uniformly sample steady to match the larger change class.' \
     "Train: ${train_records} records" \
     "Validation: ${val_records} records" \
     "Test: ${test_records} records" \

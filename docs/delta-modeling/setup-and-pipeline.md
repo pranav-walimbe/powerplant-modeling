@@ -66,7 +66,7 @@ AOIs by activity-conditioned median NOx, retains the highest-scoring half,
 builds five-timestep time-weighted window targets, and assigns overlapping AOIs
 to the same geographic split. Training is balanced to its smallest class.
 Validation and test keep every increase and decrease record, then use
-near-zero-weighted steady samples to reach their target sizes. See
+fixed-seed uniform steady samples to match their larger change class. See
 [dataset_design.md](dataset_design.md).
 
 ## 3. Generate raster records

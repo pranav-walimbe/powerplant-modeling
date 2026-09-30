@@ -11,7 +11,7 @@ three-class emissions-change label for a 72 km area of interest (AOI).
 | Classes | `decrease`, `steady`, `increase` |
 | Split unit | Cluster of overlapping 72 km AOIs |
 | Split target | About 70% train, 15% validation, 15% test by AOIs and candidate records |
-| Metadata sampling | Balance training; retain held-out changes and fill with near-zero steady records |
+| Metadata sampling | Balance training; retain held-out changes and cap steady at the larger change class |
 | Raster quality | At least 85% finite NO2 per timestep |
 | Model selection | Validation split only; test remains frozen |
 
@@ -42,11 +42,8 @@ The pipeline applies these steps in order:
    targeting the 70/15/15 ratio for both AOIs and candidate records.
 8. Downsample each training class to the smallest training-class count with a
    fixed seed. For validation and test, retain every increase and decrease
-   record, then sample enough steady records to reach each split's target size.
-   Define those target sizes from the selected training size and the 70/15/15
-   proportions. Use deterministic weighted sampling for held-out steady records
-   with weight `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily
-   favors records nearest zero change.
+   record, then uniformly sample steady records until their count matches the
+   larger held-out change class. Use a fixed seed for reproducibility.
 9. Generate rasters and reject records that fail coverage or source-file checks.
 
 Raster quality control can change class counts after stratification. The

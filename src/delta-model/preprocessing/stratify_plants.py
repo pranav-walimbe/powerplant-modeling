@@ -47,8 +47,6 @@ from config import (
 
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
 SPLIT_SEED = 42
-STEADY_SELECTION_WEIGHT_POWER = 8.0
-MIN_STEADY_SELECTION_WEIGHT = 1e-9
 DELTA_CATEGORY_COL = "delta_category"
 AOI_SCORE_COL = "aoi_score"
 AOI_SCORE_PERCENTILE_COL = "aoi_score_percentile"
@@ -291,41 +289,30 @@ def select_window_records(
     frame: pl.DataFrame,
     split: str,
     *,
-    target_count: int | None = None,
     seed: int = SPLIT_SEED,
 ) -> pl.DataFrame:
-    """Balance training classes or fill a held-out target with steady records.
+    """Balance training classes or cap held-out steady records.
 
     Args:
         frame: Eligible records carrying start and end NOx means.
         split: Split name used in progress and error messages.
-        target_count: Desired held-out size after retaining every change record.
         seed: Deterministic sampling seed.
 
     Returns:
         A minimum-class-balanced training split or every held-out change record
-        plus a weighted steady sample up to the requested size.
+        plus a uniform steady sample matching the larger change class.
     """
     counts = frame.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
     count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
     if split != "train":
-        if target_count is None:
-            raise ValueError(f"[{split}] target_count is required for held-out sampling")
-        if target_count < 0:
-            raise ValueError(f"[{split}] target_count must be nonnegative")
+        count_by_class = dict(counts.iter_rows())
         change_records = frame.filter(pl.col(DELTA_CATEGORY_COL) != "steady")
         steady_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == "steady")
-        steady_count = min(steady_records.height, max(target_count - change_records.height, 0))
-        change = pl.col(AVG_NOX_END_COL) - pl.col(AVG_NOX_START_COL)
-        center_proximity = (1 - change.abs() / pl.col(HYBRID_THRESHOLD_COL)).clip(0.0, 1.0)
-        weight = center_proximity.pow(STEADY_SELECTION_WEIGHT_POWER).clip(
-            lower_bound=MIN_STEADY_SELECTION_WEIGHT,
-            upper_bound=1.0,
-        )
+        steady_limit = max(count_by_class.get("decrease", 0), count_by_class.get("increase", 0))
         selected_steady = deterministic_weighted_sample(
             steady_records,
-            steady_count,
-            weight,
+            steady_limit,
+            pl.lit(1.0),
             (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp"),
             seed,
         )
@@ -335,8 +322,8 @@ def select_window_records(
             f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in retained_counts.iter_rows(named=True)
         )
         print(
-            f"[{split}] eligible {count_summary}; retained {retained_summary}; target={target_count:,}, "
-            f"steady fill={steady_count:,}, total={retained.height:,}"
+            f"[{split}] eligible {count_summary}; retained {retained_summary}; "
+            f"steady limit={steady_limit:,}, total={retained.height:,}"
         )
         return retained
 
@@ -824,11 +811,7 @@ def main() -> None:
         f"{STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute"
     )
     eligible_splits = _split_by_cluster(frame)
-    train = select_window_records(eligible_splits["train"], "train")
-    splits = {"train": train}
-    for split in ("val", "test"):
-        target_count = round(train.height * SPLIT_FRACTIONS[split] / SPLIT_FRACTIONS["train"])
-        splits[split] = select_window_records(eligible_splits[split], split, target_count=target_count)
+    splits = {split: select_window_records(split_frame, split) for split, split_frame in eligible_splits.items()}
     _plot_stratification_diagnostics(eligible_splits, splits, args.diagnostic_output)
     _plot_monthly_class_prevalence(splits, args.monthly_prevalence_output)
     _plot_solar_hour_class_prevalence(splits, args.solar_hour_prevalence_output)
