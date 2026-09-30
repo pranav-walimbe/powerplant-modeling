@@ -83,7 +83,6 @@ SHARD_FINALIZER_JOB_NAME = "generate-dataset-finalize"
 TRAINING_JOB_NAME = "train-no2"
 RUN_STARTED_ENV = "DATASET_RUN_STARTED_AT"
 POST_FILTER_DIAGNOSTIC_PREFIX = "dataset-window-behavior"
-POST_QC_BALANCE_SEED = 42
 DELTA_CATEGORY_COL = "delta_category"
 CLASS_NAMES = ("decrease", "steady", "increase")
 CLASS_COLORS = ("#3977af", "#999999", "#d65f4a")
@@ -111,44 +110,6 @@ class StagedBatch:
     weather_misses: dict[str, WeatherTask]
     tempo_cache_paths: dict[str, str]
     weather_cache_paths: dict[str, str]
-
-
-def _class_counts(frame: pl.DataFrame) -> dict[str, int]:
-    # Count target records in modeling order
-    counts = dict(frame.group_by(DELTA_CATEGORY_COL).len().iter_rows())
-    return {class_name: int(counts.get(class_name, 0)) for class_name in CLASS_NAMES}
-
-
-def _balance_post_qc_split(frame: pl.DataFrame, split: str) -> tuple[pl.DataFrame, str, int]:
-    # Apply the fixed split-specific balancing policy after raster filtering
-    counts = _class_counts(frame)
-    missing_classes = [class_name for class_name, count in counts.items() if count == 0]
-    if missing_classes:
-        raise ValueError(f"[{split}] no post-QC records remain for: {', '.join(missing_classes)}")
-    if split == "train":
-        policy = "change_class_maximum_with_random_resampling"
-        target = max(counts["decrease"], counts["increase"])
-    else:
-        policy = "minimum_class_count_with_random_downsampling"
-        target = min(counts.values())
-
-    selected = []
-    split_index = ARRAY_SPLITS.index(split)
-    for class_index, class_name in enumerate(CLASS_NAMES):
-        class_records = frame.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
-        class_seed = POST_QC_BALANCE_SEED + split_index * len(CLASS_NAMES) + class_index
-        if class_records.height > target:
-            class_records = class_records.sample(n=target, shuffle=True, seed=class_seed)
-        elif class_records.height < target:
-            additions = class_records.sample(
-                n=target - class_records.height,
-                with_replacement=True,
-                shuffle=True,
-                seed=class_seed,
-            )
-            class_records = pl.concat((class_records, additions))
-        selected.append(class_records)
-    return pl.concat(selected).sort(SOURCE_RECORD_INDEX_COL), policy, target
 
 
 def _positive_int(value: str) -> int:
@@ -548,17 +509,10 @@ def _write_outputs(
     prepared_outputs: dict[str, tuple[pl.DataFrame, dict[str, object], pl.DataFrame]] = {}
     for split, candidates in candidates_by_split.items():
         coverage_summary = coverage_selection_summary(candidates)
-        balanced, balance_policy, target_count = _balance_post_qc_split(candidates, split)
-        before_counts = _class_counts(candidates)
-        after_counts = _class_counts(balanced)
         print(f"[{split}] {candidates.height:,} records passed raster generation")
         print(
             f"[{split}] full sequence coverage: {coverage_summary['full_coverage_records']:,}/"
             f"{coverage_summary['records']:,} records across {coverage_summary['aoi_count']:,} AOIs"
-        )
-        print(
-            f"[{split}] post-QC balance target={target_count:,} per class; "
-            f"published {balanced.height:,} records"
         )
         generation_report = {
             "split": split,
@@ -568,19 +522,11 @@ def _write_outputs(
             },
             "source_records": source_splits[split].height,
             "generated_records": candidates.height,
-            "published_records": balanced.height,
             "processing_failures": failure_frames[split].height,
             "coverage": coverage_summary,
-            "post_qc_balancing": {
-                "policy": balance_policy,
-                "seed": POST_QC_BALANCE_SEED,
-                "target_records_per_class": target_count,
-                "class_counts_before": before_counts,
-                "class_counts_after": after_counts,
-            },
         }
         prepared_outputs[split] = (
-            balanced,
+            candidates,
             generation_report,
             failure_frames[split],
         )
@@ -609,7 +555,7 @@ def _write_outputs(
             Path(DATASET_DF) / f"{split}_failures.csv",
         )
         print(f"[{split}] wrote {output_frame.height:,} records; {failure_frame.height:,} processing failures")
-    return {split: prepared[0] for split, prepared in prepared_outputs.items()}
+    return candidates_by_split
 
 
 def _post_filter_diagnostic_path() -> Path:
@@ -619,7 +565,7 @@ def _post_filter_diagnostic_path() -> Path:
 
 
 def _plot_post_filter_window_behavior(splits: dict[str, pl.DataFrame], output_path: Path) -> None:
-    # Plot emissions trajectories for published post-QC records
+    # Plot emissions trajectories for records that survived raster filtering
     figure, raw_axes = plt.subplots(1, len(splits), figsize=(16, 4.8), constrained_layout=True)
     axes = [raw_axes] if len(splits) == 1 else list(raw_axes)
     positions = np.arange(SEQUENCE_TIMESTEPS)
@@ -646,7 +592,7 @@ def _plot_post_filter_window_behavior(splits: dict[str, pl.DataFrame], output_pa
         if column_index == 0:
             axis.legend()
     figure.suptitle(
-        "Five-timestep emissions behavior after raster filtering and class balancing\n"
+        "Five-timestep emissions behavior after raster filtering\n"
         f"Threshold: {STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; lines show median and IQR"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -711,9 +657,9 @@ def _finalize_shards(
         failures[task.split].extend(failure_frame.to_dicts())
 
     source_splits = _load_splits(split_paths)
-    published_splits = _write_outputs(output_rows, failures, source_splits)
+    surviving_splits = _write_outputs(output_rows, failures, source_splits)
     diagnostic_path = _post_filter_diagnostic_path()
-    _plot_post_filter_window_behavior(published_splits, diagnostic_path)
+    _plot_post_filter_window_behavior(surviving_splits, diagnostic_path)
     print(f"Saved post-filter window behavior to {diagnostic_path}")
     elapsed = time.perf_counter() - started_at
     peak_memory_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024

@@ -47,13 +47,10 @@ The pipeline applies these steps in order:
    `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily favors
    records nearest zero change.
 10. Generate rasters and reject records that fail coverage or source-file checks.
-11. Balance the records that survive raster generation. For validation and
-    test, randomly downsample every class to the smallest surviving class. For
-    train, use the larger surviving change-class count as the target and
-    randomly downsample or upsample every class to that count.
 
-The finalizer reports pre- and post-balance class counts and emails the retained
-class trajectories.
+Raster quality control can change class counts after stratification. The
+finalizer emails the retained class trajectories and does not rebalance the
+surviving records.
 
 ## Label construction
 
