@@ -57,7 +57,7 @@ if [[ "${DATASET_GENERATION_STAGE:-generate}" == "finalize" ]]; then
     mail_log_offset=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" stat -c %s "${mail_log}")
     printf '%s\n' \
         'Five-timestep dataset generation completed successfully.' \
-        'The attached plot shows median and interquartile emissions trajectories by class and split after raster filtering.' \
+        'The attached plot shows median and interquartile emissions trajectories after raster filtering and class balancing.' \
         "Diagnostic: ${diagnostic}" \
         | ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \
             "mailx -s 'NO2 post-filter dataset diagnostic (${result_job_id})' -a '${diagnostic}' '${recipient}'"

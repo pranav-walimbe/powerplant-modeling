@@ -82,11 +82,11 @@ printf '%s\n' \
     'Change threshold: 250 lb/hr absolute.' \
     'Eligible AOIs provide at least 20 candidates in decrease, steady, and increase.' \
     'Steady-class downsampling uses an eighth-power bias toward changes nearest zero.' \
-    'Increase and decrease use deterministic random samples.' \
+    'Every increase and decrease record is retained.' \
     'Five causal rasters retained; labels compare time-weighted t0-t2 and t2-t4 averages.' \
     'Each timestep NOx value is linearly interpolated between its surrounding CAMPD hours.' \
     'Filtered AOI clusters were assigned by class to approximately 70/15/15 splits.' \
-    'Every split is independently balanced across decrease, steady, and increase.' \
+    'Steady records are capped at the larger increase/decrease class count in each split.' \
     "Train: ${train_records} records" \
     "Validation: ${val_records} records" \
     "Test: ${test_records} records" \

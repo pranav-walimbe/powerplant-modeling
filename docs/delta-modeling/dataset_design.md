@@ -11,8 +11,8 @@ three-class emissions-change label for a 72 km area of interest (AOI).
 | Classes | `decrease`, `steady`, `increase` |
 | Split unit | Cluster of overlapping 72 km AOIs |
 | Split target | About 70% train, 15% validation, 15% test within each class |
-| Metadata sampling | Equal class counts within each split before raster quality control |
-| Raster quality | At least 90% finite NO2 per timestep |
+| Metadata sampling | Keep all change records and cap steady at the larger change-class count |
+| Raster quality | At least 85% finite NO2 per timestep |
 | Model selection | Validation split only; test remains frozen |
 
 ## Record selection
@@ -41,16 +41,19 @@ The pipeline applies these steps in order:
 7. Retain only AOIs providing at least 20 candidate records in every class.
 8. Assign each overlap cluster to one split with a deterministic procedure that
    targets the 70/15/15 ratio for each class.
-9. Downsample each class to the smallest class count within its split. Use
-   deterministic weighted sampling for steady records with weight
+9. Keep every increase and decrease record. Cap steady records at the larger
+   of the increase and decrease counts within each split. Use deterministic
+   weighted sampling for steady records with weight
    `(1 - |window_change| / 250)^8`, floored at `1e-9`. This heavily favors
-   records nearest zero change. Sample increase and decrease records by
-   deterministic random order.
+   records nearest zero change.
 10. Generate rasters and reject records that fail coverage or source-file checks.
+11. Balance the records that survive raster generation. For validation and
+    test, randomly downsample every class to the smallest surviving class. For
+    train, use the larger surviving change-class count as the target and
+    randomly downsample or upsample every class to that count.
 
-Raster quality control can change class counts after balancing. The finalizer
-reports those counts, emails the retained class trajectories, and does not
-rebalance the retained records.
+The finalizer reports pre- and post-balance class counts and emails the retained
+class trajectories.
 
 ## Label construction
 
@@ -103,7 +106,7 @@ fraction is at most 0.20, its value and geometry are valid, and its footprint
 overlaps an output cell. Missing cells remain `NaN` in the stored raster and
 zero in `no2_mask`.
 
-Each timestep needs at least 90% finite NO2 cells. A 3 by 3 window around the
+Each timestep needs at least 85% finite NO2 cells. A 3 by 3 window around the
 cell with the largest modeled-unit count needs full support. Unit-weighted
 distance to the AOI center breaks source-cell ties.
 

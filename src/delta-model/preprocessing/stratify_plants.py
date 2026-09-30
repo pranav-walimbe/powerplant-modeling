@@ -286,13 +286,13 @@ def _filter_metadata_eligibility(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def select_balanced_window_records(
+def select_window_records(
     frame: pl.DataFrame,
     split: str,
     *,
     seed: int = SPLIT_SEED,
 ) -> pl.DataFrame:
-    """Select equal deterministic samples from the three window-change classes.
+    """Limit steady records while preserving every change record.
 
     Args:
         frame: Eligible records carrying start and end NOx means.
@@ -300,13 +300,15 @@ def select_balanced_window_records(
         seed: Deterministic within-class ordering seed.
 
     Returns:
-        All three buckets downsampled to the smallest bucket count.
+        Every increase and decrease plus a weighted steady sample capped at
+        the larger change-class count.
     """
     counts = frame.group_by(DELTA_CATEGORY_COL).len().sort(DELTA_CATEGORY_COL)
     missing_classes = set(CLASS_NAMES).difference(counts[DELTA_CATEGORY_COL].to_list())
     if missing_classes:
         raise ValueError(f"[{split}] target classes have no records: {', '.join(sorted(missing_classes))}")
-    records_per_class = int(counts["len"].min())
+    count_by_class = dict(counts.iter_rows())
+    steady_limit = max(count_by_class["decrease"], count_by_class["increase"])
     selected = []
     identity_columns = (AOI_ID_COL, "emissions_hour_utc", f"t{FINAL_TIMESTEP_INDEX}_timestamp")
     for class_name in CLASS_NAMES:
@@ -320,31 +322,24 @@ def select_balanced_window_records(
             )
             class_records = deterministic_weighted_sample(
                 class_records,
-                records_per_class,
+                steady_limit,
                 weight,
                 identity_columns,
                 seed,
             )
-        else:
-            class_records = (
-                class_records.with_columns(pl.struct(*identity_columns).hash(seed=seed).alias("_selection_tie_breaker"))
-                .sort("_selection_tie_breaker", *identity_columns)
-                .head(records_per_class)
-                .drop("_selection_tie_breaker")
-            )
         selected.append(class_records)
-    balanced = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
+    retained = pl.concat(selected).sort(AOI_ID_COL, "emissions_hour_utc")
     count_summary = ", ".join(f"{row[DELTA_CATEGORY_COL]}={row['len']:,}" for row in counts.iter_rows(named=True))
     print(
         f"[{split}] threshold={STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr absolute; eligible {count_summary}; "
-        f"selected {records_per_class:,} per class ({balanced.height:,} total)"
+        f"steady limit={steady_limit:,}; retained {retained.height:,} total"
     )
-    return balanced
+    return retained
 
 
 def _plot_stratification_diagnostics(
     eligible_splits: dict[str, pl.DataFrame],
-    balanced_splits: dict[str, pl.DataFrame],
+    selected_splits: dict[str, pl.DataFrame],
     output_path: Path,
 ) -> None:
     # Show class-specific emissions trajectories and split composition
@@ -352,10 +347,10 @@ def _plot_stratification_diagnostics(
     figure, axes = plt.subplots(2, 3, figsize=(16, 9), constrained_layout=True)
     for column_index, split_name in enumerate(split_names):
         eligible = eligible_splits[split_name]
-        balanced = balanced_splits[split_name]
+        selected = selected_splits[split_name]
         trajectory_axis = axes[0, column_index]
         for class_name, color in zip(CLASS_NAMES, CLASS_COLORS, strict=True):
-            class_frame = balanced.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
+            class_frame = selected.filter(pl.col(DELTA_CATEGORY_COL) == class_name)
             values = np.column_stack(
                 [class_frame[f"t{index}_nox"].to_numpy() for index in range(SEQUENCE_TIMESTEPS)]
             )
@@ -365,7 +360,7 @@ def _plot_stratification_diagnostics(
             trajectory_axis.plot(positions, median, marker="o", color=color, label=class_name.title())
             trajectory_axis.fill_between(positions, lower, upper, color=color, alpha=0.15)
         trajectory_axis.set(
-            title=f"{split_name.title()}: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs",
+            title=f"{split_name.title()}: {selected.height:,} records, {selected[AOI_ID_COL].n_unique():,} AOIs",
             xlabel="TEMPO timestep",
             ylabel="Interpolated NOx (lb/hr)",
             xticks=range(SEQUENCE_TIMESTEPS),
@@ -377,8 +372,8 @@ def _plot_stratification_diagnostics(
 
         category_counts = dict(eligible.group_by(DELTA_CATEGORY_COL).len().iter_rows())
         eligible_counts = np.array([category_counts.get(category, 0) for category in CLASS_NAMES])
-        balanced_count = balanced.height // len(CLASS_NAMES)
-        balanced_counts = np.full(len(CLASS_NAMES), balanced_count)
+        selected_count_by_class = dict(selected.group_by(DELTA_CATEGORY_COL).len().iter_rows())
+        selected_counts = np.array([selected_count_by_class.get(category, 0) for category in CLASS_NAMES])
         positions = np.arange(len(CLASS_NAMES))
         width = 0.38
         bucket_axis = axes[1, column_index]
@@ -392,9 +387,9 @@ def _plot_stratification_diagnostics(
         )
         after_bars = bucket_axis.bar(
             positions + width / 2,
-            balanced_counts,
+            selected_counts,
             width,
-            label="Balanced",
+            label="Selected",
             color=CLASS_COLORS,
         )
         bucket_axis.set_xticks(positions, CLASS_NAMES)
@@ -402,10 +397,10 @@ def _plot_stratification_diagnostics(
         bucket_axis.grid(axis="y", alpha=0.2)
         bucket_axis.set_title(
             f"Eligible: {eligible.height:,} records, {eligible[AOI_ID_COL].n_unique():,} AOIs\n"
-            f"Balanced: {balanced.height:,} records, {balanced[AOI_ID_COL].n_unique():,} AOIs"
+            f"Selected: {selected.height:,} records, {selected[AOI_ID_COL].n_unique():,} AOIs"
         )
         bucket_axis.bar_label(before_bars, labels=[f"{count:,}" for count in eligible_counts], fontsize=8)
-        bucket_axis.bar_label(after_bars, labels=[f"{count:,}" for count in balanced_counts], fontsize=8)
+        bucket_axis.bar_label(after_bars, labels=[f"{count:,}" for count in selected_counts], fontsize=8)
         if column_index == 0:
             bucket_axis.legend(loc="upper left")
     figure.suptitle(
@@ -805,9 +800,7 @@ def main() -> None:
         f"{STRATIFICATION_MINIMUM_RECORDS_PER_CLASS} records in every class"
     )
     eligible_splits = _split_by_cluster(frame, category_column=DELTA_CATEGORY_COL)
-    splits = {
-        split: select_balanced_window_records(split_frame, split) for split, split_frame in eligible_splits.items()
-    }
+    splits = {split: select_window_records(split_frame, split) for split, split_frame in eligible_splits.items()}
     _plot_stratification_diagnostics(eligible_splits, splits, args.diagnostic_output)
     _plot_monthly_class_prevalence(splits, args.monthly_prevalence_output)
     _plot_solar_hour_class_prevalence(splits, args.solar_hour_prevalence_output)
