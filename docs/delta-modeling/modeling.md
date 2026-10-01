@@ -15,8 +15,8 @@ mask, so it can distinguish observations from filled values.
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
 | Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
-| Loss | Unweighted three-class cross-entropy |
-| Selection | Lowest validation cross-entropy for each model |
+| Loss | Training-prevalence-weighted three-class cross-entropy |
+| Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
 The seasonal baseline uses context at the midpoint between the first and fifth
@@ -79,10 +79,13 @@ job also saves predictions and metrics from shuffled-context inference.
 
 ## Optimization
 
-All classifiers use AdamW, gradient clipping, mixed precision, validation-loss
-scheduling, and early stopping. The maintained launcher uses batch size 128,
-model width 48, head width 48, dropout 0.30, and seed 42. It does not tune new
-transport or conditioning parameters.
+All classifiers use inverse-frequency class weights computed only from the
+training split. Each class therefore contributes equal total weight to the
+cross-entropy objective. Validation macro F1 controls checkpointing and early
+stopping. Training-weighted validation cross-entropy breaks macro-F1 ties and
+drives the learning-rate scheduler. The maintained launcher uses batch size
+128, model width 48, head width 48, dropout 0.30, and seed 42. These rules are
+fixed without a parameter-selection run.
 
 Run the production workflow with:
 
@@ -99,7 +102,8 @@ state, residual statistics, and shuffled-context diagnostics.
 
 The trainer produces three figures:
 
-- `split_class_accuracy.png` compares overall and per-class performance;
+- `split_class_accuracy.png` compares balanced accuracy and per-class recall
+  with class support for every split;
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.

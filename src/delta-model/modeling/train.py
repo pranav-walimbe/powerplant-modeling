@@ -36,6 +36,7 @@ from modeling.eval_utils import (
 from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
 from modeling.transport import TransportTransform
+from sklearn.metrics import f1_score
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -131,14 +132,16 @@ def train_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
+    criterion: nn.CrossEntropyLoss,
+    class_weights: torch.Tensor,
     scaler: torch.cuda.amp.GradScaler,
     device: torch.device,
     gradient_clip_norm: float,
 ) -> tuple[float, float]:
-    """Train one epoch and return mean loss and accuracy."""
+    """Train one epoch and return weighted mean loss and accuracy."""
     model.train()
     total_loss = 0.0
+    total_loss_weight = 0.0
     correct = 0
     amp_enabled = device.type == "cuda"
     for batch in loader:
@@ -146,37 +149,59 @@ def train_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=amp_enabled):
             logits = model(image, seasonal, transport)
-            loss = criterion(logits, target)
+            per_record_loss = criterion(logits, target)
+            loss_weight = class_weights[target].sum()
+            loss = per_record_loss.sum() / loss_weight
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
         scaler.step(optimizer)
         scaler.update()
-        total_loss += loss.detach().item() * target.numel()
+        total_loss += per_record_loss.detach().sum().item()
+        total_loss_weight += loss_weight.item()
         correct += int((logits.argmax(dim=1) == target).sum().item())
-    return total_loss / len(loader.dataset), correct / len(loader.dataset)
+    return total_loss / total_loss_weight, correct / len(loader.dataset)
 
 
 def val_epoch(
     model: nn.Module,
     loader: DataLoader,
-    criterion: nn.Module,
+    criterion: nn.CrossEntropyLoss,
+    class_weights: torch.Tensor,
     device: torch.device,
-) -> tuple[float, float]:
-    """Evaluate one epoch and return mean loss and accuracy."""
+) -> tuple[float, float, float]:
+    """Return weighted loss, accuracy, and macro F1 for one validation epoch."""
     model.eval()
     total_loss = 0.0
+    total_loss_weight = 0.0
     correct = 0
+    targets: list[np.ndarray] = []
+    predictions: list[np.ndarray] = []
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
         for batch in loader:
             image, seasonal, transport, target, _ = _move_batch(batch, device)
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
                 logits = model(image, seasonal, transport)
-                loss = criterion(logits, target)
-            total_loss += loss.item() * target.numel()
-            correct += int((logits.argmax(dim=1) == target).sum().item())
-    return total_loss / len(loader.dataset), correct / len(loader.dataset)
+                per_record_loss = criterion(logits, target)
+            predicted = logits.argmax(dim=1)
+            total_loss += per_record_loss.sum().item()
+            total_loss_weight += class_weights[target].sum().item()
+            correct += int((predicted == target).sum().item())
+            targets.append(target.cpu().numpy())
+            predictions.append(predicted.cpu().numpy())
+    truth = np.concatenate(targets)
+    predicted = np.concatenate(predictions)
+    macro_f1 = float(
+        f1_score(
+            truth,
+            predicted,
+            labels=np.arange(len(MODEL_CLASS_NAMES)),
+            average="macro",
+            zero_division=0,
+        )
+    )
+    return total_loss / total_loss_weight, correct / len(loader.dataset), macro_f1
 
 
 def fit_model(
@@ -187,15 +212,17 @@ def fit_model(
     device: torch.device,
     epochs: int,
     learning_rate: float,
+    class_weight_values: tuple[float, ...],
     args: argparse.Namespace,
     checkpoint_path: Path,
     checkpoint_metadata: dict[str, object],
     phase_name: str,
-) -> tuple[list[float], list[float], float]:
-    """Fit one classifier and restore its lowest-validation-loss state."""
+) -> tuple[list[float], list[float], float, float]:
+    """Fit one classifier and restore its best-validation-macro-F1 state."""
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=learning_rate, weight_decay=args.weight_decay)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = torch.tensor(class_weight_values, dtype=torch.float32, device=device)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -203,7 +230,8 @@ def fit_model(
         factor=args.scheduler_factor,
     )
     scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
-    best_val_loss = float("inf")
+    best_validation_macro_f1 = float("-inf")
+    best_validation_loss = float("inf")
     train_losses: list[float] = []
     val_losses: list[float] = []
     epochs_without_improvement = 0
@@ -214,21 +242,33 @@ def fit_model(
             train_loader,
             optimizer,
             criterion,
+            class_weights,
             scaler,
             device,
             args.gradient_clip_norm,
         )
-        validation_loss, validation_accuracy = val_epoch(model, val_loader, criterion, device)
+        validation_loss, validation_accuracy, validation_macro_f1 = val_epoch(
+            model,
+            val_loader,
+            criterion,
+            class_weights,
+            device,
+        )
         scheduler.step(validation_loss)
         train_losses.append(train_loss)
         val_losses.append(validation_loss)
         learning_rate_now = optimizer.param_groups[0]["lr"]
         print(
             f"{phase_name} epoch {epoch:03d} | train loss {train_loss:.5f} acc {train_accuracy:.4f} | "
-            f"val loss {validation_loss:.5f} acc {validation_accuracy:.4f} | lr {learning_rate_now:.2e}"
+            f"val loss {validation_loss:.5f} acc {validation_accuracy:.4f} macro F1 {validation_macro_f1:.4f} | "
+            f"lr {learning_rate_now:.2e}"
         )
-        if validation_loss < best_val_loss:
-            best_val_loss = validation_loss
+        selection_improved = validation_macro_f1 > best_validation_macro_f1 or (
+            validation_macro_f1 == best_validation_macro_f1 and validation_loss < best_validation_loss
+        )
+        if selection_improved:
+            best_validation_macro_f1 = validation_macro_f1
+            best_validation_loss = validation_loss
             epochs_without_improvement = 0
             torch.save(
                 {
@@ -236,6 +276,7 @@ def fit_model(
                     "model_state_dict": model.state_dict(),
                     "validation_loss": validation_loss,
                     "validation_accuracy": validation_accuracy,
+                    "validation_macro_f1": validation_macro_f1,
                     **checkpoint_metadata,
                 },
                 checkpoint_path,
@@ -248,7 +289,7 @@ def fit_model(
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
-    return train_losses, val_losses, best_val_loss
+    return train_losses, val_losses, best_validation_macro_f1, best_validation_loss
 
 
 def _checkpoint_sha256(path: Path) -> str:
@@ -422,6 +463,16 @@ def _class_counts(dataset: NOxDataset) -> dict[str, int]:
     return {name: int(np.sum(dataset.labels == index)) for index, name in enumerate(MODEL_CLASS_NAMES)}
 
 
+def _class_weights(dataset: NOxDataset) -> dict[str, float]:
+    # Give every training class equal total loss weight
+    counts = np.bincount(dataset.labels, minlength=len(MODEL_CLASS_NAMES))
+    if np.any(counts == 0):
+        missing = [name for name, count in zip(MODEL_CLASS_NAMES, counts, strict=True) if count == 0]
+        raise ValueError(f"Training data has no records for classes: {', '.join(missing)}")
+    weights = len(dataset) / (len(MODEL_CLASS_NAMES) * counts)
+    return {name: float(weights[index]) for index, name in enumerate(MODEL_CLASS_NAMES)}
+
+
 def main() -> None:
     """Train and evaluate seasonal and context-aware vision classifiers."""
     args = parse_args()
@@ -505,6 +556,8 @@ def main() -> None:
     seasonal_eval_loaders = {
         split: _loader(dataset, shuffle=False, args=args, device=device) for split, dataset in seasonal_datasets.items()
     }
+    class_weights = _class_weights(datasets["train"])
+    class_weight_values = tuple(class_weights[name] for name in MODEL_CLASS_NAMES)
     common_checkpoint_metadata = {
         "normalization_stats": stats.to_dict(),
         "seasonal_feature_names": MODEL_FEATURE_NAMES,
@@ -512,6 +565,10 @@ def main() -> None:
         "class_names": MODEL_CLASS_NAMES,
         "sequence_timesteps": SEQUENCE_TIMESTEPS,
         "pretrained_masked_model_sha256": masked_checkpoint_sha256,
+        "loss": "training_prevalence_weighted_hard_cross_entropy",
+        "class_weights": class_weights,
+        "selection_metric": "validation_macro_f1",
+        "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
     }
     histories: dict[str, tuple[list[float], list[float]]] = {}
     model_frames: dict[str, dict[str, pd.DataFrame]] = {}
@@ -519,13 +576,19 @@ def main() -> None:
 
     seasonal_model = SeasonalMLP(len(MODEL_FEATURE_NAMES)).to(device)
     print(f"Training {seasonal_model.num_params():,}-parameter seasonal classifier on {device}")
-    seasonal_train_losses, seasonal_val_losses, seasonal_best_loss = fit_model(
+    (
+        seasonal_train_losses,
+        seasonal_val_losses,
+        seasonal_best_macro_f1,
+        seasonal_checkpoint_loss,
+    ) = fit_model(
         seasonal_model,
         seasonal_train_loader,
         seasonal_eval_loaders["val"],
         device=device,
         epochs=args.seasonal_epochs,
         learning_rate=args.seasonal_learning_rate,
+        class_weight_values=class_weight_values,
         args=args,
         checkpoint_path=checkpoint_dir / "best_seasonal_classifier.pt",
         checkpoint_metadata=common_checkpoint_metadata,
@@ -539,7 +602,8 @@ def main() -> None:
         "maximum_epochs": args.seasonal_epochs,
         "learning_rate": args.seasonal_learning_rate,
         "parameters": seasonal_model.num_params(),
-        "best_validation_loss": seasonal_best_loss,
+        "best_validation_macro_f1": seasonal_best_macro_f1,
+        "checkpoint_validation_loss": seasonal_checkpoint_loss,
     }
     histories["seasonal"] = (seasonal_train_losses, seasonal_val_losses)
     model_frames["seasonal"] = seasonal_frames
@@ -556,13 +620,19 @@ def main() -> None:
     ).to(device)
     vision_train_loader = _loader(transport_datasets["train"], shuffle=True, args=args, device=device)
     print(f"Training {vision_model.num_params():,}-parameter vision classifier")
-    vision_train_losses, vision_validation_losses, vision_best_loss = fit_model(
+    (
+        vision_train_losses,
+        vision_validation_losses,
+        vision_best_macro_f1,
+        vision_checkpoint_loss,
+    ) = fit_model(
         vision_model,
         vision_train_loader,
         transport_eval_loaders["val"],
         device=device,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
+        class_weight_values=class_weight_values,
         args=args,
         checkpoint_path=checkpoint_dir / "best_vision_classifier.pt",
         checkpoint_metadata={
@@ -573,7 +643,6 @@ def main() -> None:
             "model_width": args.model_width,
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
-            "loss": "unweighted_hard_cross_entropy",
         },
         phase_name="Vision classifier",
     )
@@ -602,9 +671,10 @@ def main() -> None:
         "learning_rate": args.learning_rate,
         "parameters": vision_model.num_params(),
         "model_width": args.model_width,
-        "best_validation_loss": vision_best_loss,
+        "best_validation_macro_f1": vision_best_macro_f1,
+        "checkpoint_validation_loss": vision_checkpoint_loss,
         "encoder_initialization": "random",
-        "loss": "unweighted_hard_cross_entropy",
+        "loss": "training_prevalence_weighted_hard_cross_entropy",
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
         "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
@@ -616,7 +686,10 @@ def main() -> None:
     run_config = {
         "device": str(device),
         "models": ["seasonal", "vision"],
-        "loss": "unweighted_hard_cross_entropy",
+        "loss": "training_prevalence_weighted_hard_cross_entropy",
+        "class_weights": class_weights,
+        "selection_metric": "validation_macro_f1",
+        "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
         "batch_size": args.batch_size,
         "workers": args.workers,
         "training": training_summaries,

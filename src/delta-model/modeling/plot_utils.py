@@ -59,7 +59,7 @@ def plot_split_class_accuracy(
     model_frames: dict[str, dict[str, pd.DataFrame]],
     run_dir: str | Path,
 ) -> None:
-    """Plot overall and per-class accuracy for each data split.
+    """Plot balanced and per-class accuracy for each data split.
 
     Args:
         model_frames: Row-level predictions by model and split.
@@ -76,7 +76,9 @@ def plot_split_class_accuracy(
     width = 0.8 / len(models)
     offsets = (np.arange(len(models)) - (len(models) - 1) / 2) * width
     for model_name, offset in zip(models, offsets, strict=True):
-        scores = [classification_metrics(model_frames[model_name][split])["accuracy"] for split in SPLIT_ORDER]
+        scores = [
+            classification_metrics(model_frames[model_name][split])["balanced_accuracy"] for split in SPLIT_ORDER
+        ]
         bars = overall_axis.bar(
             split_positions + offset,
             scores,
@@ -86,8 +88,8 @@ def plot_split_class_accuracy(
         )
         _label_bars(overall_axis, bars)
     overall_axis.set(
-        title="Overall accuracy by split",
-        ylabel="Accuracy",
+        title="Balanced accuracy by split",
+        ylabel="Balanced accuracy",
         xticks=split_positions,
         xticklabels=[split.title() for split in SPLIT_ORDER],
         ylim=(0, 1.08),
@@ -96,6 +98,7 @@ def plot_split_class_accuracy(
 
     class_positions = np.arange(len(MODEL_CLASS_NAMES), dtype=np.float64)
     for axis, split in zip(class_axes, SPLIT_ORDER, strict=True):
+        class_counts = classification_metrics(model_frames[models[0]][split])["class_counts"]
         for model_name, offset in zip(models, offsets, strict=True):
             recalls = classification_metrics(model_frames[model_name][split])["class_recall"]
             scores = [recalls[class_name] for class_name in MODEL_CLASS_NAMES]
@@ -111,10 +114,10 @@ def plot_split_class_accuracy(
             title=f"{split.title()} per-class accuracy",
             ylabel="Recall",
             xticks=class_positions,
-            xticklabels=[name.title() for name in MODEL_CLASS_NAMES],
+            xticklabels=[f"{name.title()}\n(n={class_counts[name]:,})" for name in MODEL_CLASS_NAMES],
             ylim=(0, 1.08),
         )
-    figure.suptitle("Classification accuracy by model", fontsize=16)
+    figure.suptitle("Balanced and per-class accuracy by model", fontsize=16)
     figure.tight_layout()
     _save(figure, run_dir, "split_class_accuracy")
 
