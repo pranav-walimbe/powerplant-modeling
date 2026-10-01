@@ -16,8 +16,6 @@ from modeling.convgru import (
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
-    MAX_CONTEXT_SCALE_DELTA,
-    MAX_CONTEXT_SHIFT,
     VisionClassifier,
 )
 from modeling.dataset import (
@@ -570,10 +568,8 @@ def main() -> None:
         checkpoint_metadata={
             **common_checkpoint_metadata,
             "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-            "context_fusion": "bounded_scale_and_shift_film_per_timestep",
+            "context_fusion": "scale_and_shift_film_per_timestep",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-            "maximum_context_scale_delta": MAX_CONTEXT_SCALE_DELTA,
-            "maximum_context_shift": MAX_CONTEXT_SHIFT,
             "model_width": args.model_width,
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
@@ -610,10 +606,8 @@ def main() -> None:
         "encoder_initialization": "random",
         "loss": "unweighted_hard_cross_entropy",
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-        "context_fusion": "bounded_scale_and_shift_film_per_timestep",
+        "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-        "maximum_context_scale_delta": MAX_CONTEXT_SCALE_DELTA,
-        "maximum_context_shift": MAX_CONTEXT_SHIFT,
     }
     del vision_model, vision_train_loader
     if device.type == "cuda":
@@ -676,13 +670,12 @@ def main() -> None:
         },
         "context_fusion": {
             "location": "branch_spatial_bottlenecks_at_each_timestep",
-            "method": "bounded_scale_and_shift_film",
+            "method": "scale_and_shift_film",
+            "parameterization": "gamma_equals_one_plus_delta_gamma_beta_equals_delta_beta",
             "initial_timestep_context": True,
             "identity_initialized": True,
             "additive_shift": True,
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-            "maximum_scale_delta": MAX_CONTEXT_SCALE_DELTA,
-            "maximum_shift": MAX_CONTEXT_SHIFT,
         },
     }
     with (run_dir / "run_config.json").open("w") as destination:

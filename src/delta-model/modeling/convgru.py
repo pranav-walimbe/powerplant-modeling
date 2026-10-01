@@ -11,8 +11,6 @@ DEFAULT_HEAD_DIM = 64
 DEFAULT_DROPOUT = 0.20
 DEFAULT_MODEL_WIDTH = 64
 DEFAULT_CONTEXT_DROPOUT = 0.25
-MAX_CONTEXT_SCALE_DELTA = 0.25
-MAX_CONTEXT_SHIFT = 0.25
 
 
 def _group_norm(channels: int) -> nn.GroupNorm:
@@ -197,10 +195,10 @@ class VisionClassifier(nn.Module):
         observation_scale_delta, observation_shift = self.observation_film_projection(embedding).chunk(2, dim=-1)
         residual_scale_delta, residual_shift = self.residual_film_projection(embedding[:, 1:]).chunk(2, dim=-1)
         return (
-            1.0 + MAX_CONTEXT_SCALE_DELTA * torch.tanh(observation_scale_delta),
-            MAX_CONTEXT_SHIFT * torch.tanh(observation_shift),
-            1.0 + MAX_CONTEXT_SCALE_DELTA * torch.tanh(residual_scale_delta),
-            MAX_CONTEXT_SHIFT * torch.tanh(residual_shift),
+            1.0 + observation_scale_delta,
+            observation_shift,
+            1.0 + residual_scale_delta,
+            residual_shift,
         )
 
     def forward(

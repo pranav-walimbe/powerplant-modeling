@@ -73,7 +73,7 @@ context and initializes the temporal state without a synthetic residual. Each
 later observation and aligned residual are modulated with that timestep's
 context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 
-This is identity-initialized FiLM with bounded scale and additive shift.
+This is identity-initialized FiLM with unbounded scale and additive shift.
 Training drops the full context sequence for a random share of samples. The
 job also saves predictions and metrics from shuffled-context inference.
 
