@@ -31,3 +31,6 @@ Records are the number of true examples for each class in the split.
 | Remove additive FiLM shifts so seasonal context can only rescale each branch's per-timestep features | `delta_scale_only_film_20261001_070955` | 0.4938 | 0.5424 | 0.4476 | 0.4871 | 0.6926 |
 | Remove FiLM and concatenate the midpoint seasonal embedding with the temporally aggregated visual embedding | `delta_no_film_20261001_074126` | 0.4938 | 0.5416 | 0.4200 | 0.5294 | 0.6755 |
 | Increase the baseline FiLM vision model width from 48 to 64 while keeping the classifier head width at 48 | `delta_model_width_64_20261001_080816` | 0.4938 | 0.5514 | 0.4651 | 0.5109 | 0.6782 |
+| Restore the baseline FiLM design and replace hard-label cross-entropy with threshold-aware soft cross-entropy at a 50 lb/hr temperature | `delta_soft_cross_entropy_20261001_183615` | 0.5122 | 0.5481 | 0.4391 | 0.5462 | 0.6590 |
+| Add a 12x12 smoothed delta-raster decoder to the baseline FiLM model and jointly optimize unit-weight normalized raster L1 with hard cross-entropy | `delta_joint_raster_12x12_20261001_193944` | 0.4938 | 0.5469 | 0.4180 | 0.5277 | 0.6949 |
+| Restore the baseline FiLM model and smooth each physical transport residual with a quality-weighted normalized Gaussian at sigma 1 native pixel | `delta_quality_aware_residual_smoothing_20261001_200841` | 0.4938 | 0.5448 | 0.4478 | 0.4942 | 0.6926 |
