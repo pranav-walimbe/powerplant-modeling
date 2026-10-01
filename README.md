@@ -1,1 +1,0 @@
-Estimate power-plant NOx emissions from TEMPO satellite imagery

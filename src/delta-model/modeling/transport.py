@@ -28,6 +28,21 @@ class TransportConfig:
     next_wind_weight: float = 0.5
     wind_speed_multiplier: float = 0.8
 
+    def to_metadata(self) -> dict[str, bool | float | None]:
+        """Describe the active transport parameters.
+
+        Returns:
+            JSON-serializable transport parameters and activation flags.
+        """
+        return {
+            "decay_enabled": self.decay_lifetime_hours is not None,
+            "decay_lifetime_hours": self.decay_lifetime_hours,
+            "dispersion_enabled": self.dispersion_sigma_pixels_at_one_hour > MIN_GAUSSIAN_SIGMA,
+            "dispersion_sigma_pixels_at_one_hour": self.dispersion_sigma_pixels_at_one_hour,
+            "next_wind_weight": self.next_wind_weight,
+            "wind_speed_multiplier": self.wind_speed_multiplier,
+        }
+
 
 def _base_grid(height: int, width: int, reference: torch.Tensor) -> torch.Tensor:
     # Build pixel-center coordinates for align_corners=False sampling

@@ -53,9 +53,12 @@ quality. Backtraces outside the raster receive zero quality while the residual
 value remains available to the encoder. A training-only pass fits
 quality-weighted residual mean and standard deviation.
 
-The operator accepts an optional decay lifetime and optional interval wind
-fields. These hooks support later decay and elevated-wind or plume-rise
-experiments. The horizontal-advection baseline leaves both disabled.
+The maintained configuration blends endpoint winds equally, scales wind speed
+by 0.8, disperses the transported enhancement with a one-hour width of one
+pixel, and applies an eight-hour effective decay lifetime. The transform can
+accept externally supplied interval winds, but the pipeline does not implement
+elevated-wind selection or plume rise. The run and checkpoint metadata record
+the active transport values directly from the transport configuration.
 
 ## Models
 
@@ -96,14 +99,15 @@ sbatch scripts/slurm/train_model.sh
 ## Evaluation and artifacts
 
 `results.json` reports accuracy, balanced accuracy, macro F1, macro one-vs-rest
-AUROC, per-class recall, confusion matrices, and predicted-class frequencies.
+AUROC, per-class F1, per-class recall, confusion matrices, and predicted-class
+frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
 The trainer produces three figures:
 
-- `split_class_accuracy.png` compares balanced accuracy and per-class recall
-  with class support for every split;
+- `split_class_f1.png` compares macro F1 and per-class F1 with class support for
+  every split;
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.

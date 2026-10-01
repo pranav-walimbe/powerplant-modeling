@@ -34,8 +34,8 @@ from modeling.eval_utils import (
     save_results,
 )
 from modeling.mlp import SeasonalMLP
-from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
-from modeling.transport import TransportTransform
+from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_f1, plot_training_curves
+from modeling.transport import TransportConfig, TransportTransform
 from sklearn.metrics import f1_score
 from torch import nn
 from torch.utils.data import DataLoader
@@ -366,9 +366,10 @@ def _fill_missing_rasters(
 def _fit_transport_residual_stats(
     loader: DataLoader,
     stats: NormalizationStats,
+    config: TransportConfig,
 ) -> dict[str, float]:
     # Fit quality-weighted physical residual moments on the training split
-    transport = TransportTransform(stats.image_center, stats.image_scale)
+    transport = TransportTransform(stats.image_center, stats.image_scale, config=config)
     total_weight = 0.0
     weighted_sum = 0.0
     weighted_square_sum = 0.0
@@ -522,19 +523,21 @@ def main() -> None:
         )
         for split in ("train", "val", "test")
     }
+    transport_config = TransportConfig()
     transport_stats_loader = _loader(
         datasets["train"],
         shuffle=False,
         args=args,
         device=torch.device("cpu"),
     )
-    transport_residual_stats = _fit_transport_residual_stats(transport_stats_loader, stats)
+    transport_residual_stats = _fit_transport_residual_stats(transport_stats_loader, stats, transport_config)
     del transport_stats_loader
     transport_transform = TransportTransform(
         stats.image_center,
         stats.image_scale,
         residual_center=transport_residual_stats["center"],
         residual_scale=transport_residual_stats["scale"],
+        config=transport_config,
     )
     transport_datasets = {
         split: NOxDataset(
@@ -643,6 +646,7 @@ def main() -> None:
             "model_width": args.model_width,
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
+            "transport_config": transport_config.to_metadata(),
         },
         phase_name="Vision classifier",
     )
@@ -734,12 +738,11 @@ def main() -> None:
         "transport": {
             "execution": "cpu_dataloader_transform",
             "method": "backward_semi_lagrangian_bilinear",
-            "wind": "interval_mean_80m_wind",
+            "wind": "endpoint_blended_80m_wind",
             "residual": "current_minus_advected_prior",
-            "decay_enabled": False,
-            "elevated_wind_enabled": False,
             "residual_quality": "current_no2_quality_times_warped_source_no2_quality",
             "residual_normalization": transport_residual_stats,
+            **transport_config.to_metadata(),
         },
         "context_fusion": {
             "location": "branch_spatial_bottlenecks_at_each_timestep",
@@ -762,7 +765,7 @@ def main() -> None:
     for split, frame in shuffled_context_frames.items():
         frame.to_csv(run_dir / f"vision_shuffled_{split}_predictions.csv", index=False)
 
-    plot_split_class_accuracy(model_frames, run_dir)
+    plot_split_class_f1(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")

@@ -12,12 +12,12 @@ job_id="$2"
 recipient="$3"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
 mail_log="/var/log/maillog"
-accuracy_plot="${run_dir}/split_class_accuracy.png"
+class_f1_plot="${run_dir}/split_class_f1.png"
 loss_plot="${run_dir}/training_curves.png"
 characteristic_plot="${run_dir}/accuracy_by_characteristic.png"
 
 for artifact in \
-    "${accuracy_plot}" \
+    "${class_f1_plot}" \
     "${loss_plot}" \
     "${characteristic_plot}"; do
     if [[ ! -s "${artifact}" ]]; then
@@ -34,7 +34,7 @@ printf 'NO2 classification training completed successfully.\n\nThe attachments c
     "${job_id}" \
     | ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \
         "mailx -s 'NO2 classification results (${job_id})' \
-            -a '${accuracy_plot}' -a '${loss_plot}' -a '${characteristic_plot}' '${recipient}'"
+            -a '${class_f1_plot}' -a '${loss_plot}' -a '${characteristic_plot}' '${recipient}'"
 
 delivery_confirmed=false
 for _ in {1..30}; do
