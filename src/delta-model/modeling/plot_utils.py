@@ -51,15 +51,15 @@ def _available_models(model_frames: dict[str, dict[str, pd.DataFrame]]) -> tuple
 
 
 def _label_bars(axis: Axes, bars: BarContainer) -> None:
-    # Display each plotted accuracy above its bar
+    # Display each plotted score above its bar
     axis.bar_label(bars, fmt="%.3f", padding=3, fontsize=9)
 
 
-def plot_split_class_accuracy(
+def plot_split_class_f1(
     model_frames: dict[str, dict[str, pd.DataFrame]],
     run_dir: str | Path,
 ) -> None:
-    """Plot balanced and per-class accuracy for each data split.
+    """Plot macro and per-class F1 scores for each data split.
 
     Args:
         model_frames: Row-level predictions by model and split.
@@ -67,41 +67,45 @@ def plot_split_class_accuracy(
     """
     sns.set_theme(style="whitegrid", font_scale=1.0)
     models = _available_models(model_frames)
+    metrics = {
+        model_name: {
+            split: classification_metrics(model_frames[model_name][split]) for split in SPLIT_ORDER
+        }
+        for model_name in models
+    }
     figure = plt.figure(figsize=(16, 10))
-    grid = figure.add_gridspec(2, 3, height_ratios=(1.0, 1.25))
-    overall_axis = figure.add_subplot(grid[0, :])
+    grid = figure.add_gridspec(2, len(SPLIT_ORDER), height_ratios=(1.0, 1.25))
+    macro_axis = figure.add_subplot(grid[0, :])
     class_axes = [figure.add_subplot(grid[1, index]) for index in range(len(SPLIT_ORDER))]
-
-    split_positions = np.arange(len(SPLIT_ORDER), dtype=np.float64)
     width = 0.8 / len(models)
     offsets = (np.arange(len(models)) - (len(models) - 1) / 2) * width
+
+    split_positions = np.arange(len(SPLIT_ORDER), dtype=np.float64)
     for model_name, offset in zip(models, offsets, strict=True):
-        scores = [
-            classification_metrics(model_frames[model_name][split])["balanced_accuracy"] for split in SPLIT_ORDER
-        ]
-        bars = overall_axis.bar(
+        scores = [metrics[model_name][split]["macro_f1"] for split in SPLIT_ORDER]
+        bars = macro_axis.bar(
             split_positions + offset,
             scores,
             width=width,
             color=MODEL_COLORS[model_name],
             label=MODEL_DISPLAY_NAMES[model_name],
         )
-        _label_bars(overall_axis, bars)
-    overall_axis.set(
-        title="Balanced accuracy by split",
-        ylabel="Balanced accuracy",
+        _label_bars(macro_axis, bars)
+    macro_axis.set(
+        title="Macro F1 by split",
+        ylabel="Macro F1",
         xticks=split_positions,
         xticklabels=[split.title() for split in SPLIT_ORDER],
         ylim=(0, 1.08),
     )
-    overall_axis.legend(loc="lower right")
+    macro_axis.legend(loc="lower right")
 
     class_positions = np.arange(len(MODEL_CLASS_NAMES), dtype=np.float64)
     for axis, split in zip(class_axes, SPLIT_ORDER, strict=True):
-        class_counts = classification_metrics(model_frames[models[0]][split])["class_counts"]
+        class_counts = metrics[models[0]][split]["class_counts"]
         for model_name, offset in zip(models, offsets, strict=True):
-            recalls = classification_metrics(model_frames[model_name][split])["class_recall"]
-            scores = [recalls[class_name] for class_name in MODEL_CLASS_NAMES]
+            class_f1 = metrics[model_name][split]["class_f1"]
+            scores = [class_f1[class_name] for class_name in MODEL_CLASS_NAMES]
             bars = axis.bar(
                 class_positions + offset,
                 scores,
@@ -111,15 +115,15 @@ def plot_split_class_accuracy(
             )
             _label_bars(axis, bars)
         axis.set(
-            title=f"{split.title()} per-class accuracy",
-            ylabel="Recall",
+            title=f"{split.title()} per-class F1",
+            ylabel="F1 score",
             xticks=class_positions,
             xticklabels=[f"{name.title()}\n(n={class_counts[name]:,})" for name in MODEL_CLASS_NAMES],
             ylim=(0, 1.08),
         )
-    figure.suptitle("Balanced and per-class accuracy by model", fontsize=16)
+    figure.suptitle("Macro and per-class F1 by split and model", fontsize=16)
     figure.tight_layout()
-    _save(figure, run_dir, "split_class_accuracy")
+    _save(figure, run_dir, "split_class_f1")
 
 
 def plot_training_curves(

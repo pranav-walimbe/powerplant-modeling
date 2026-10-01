@@ -23,12 +23,13 @@ def classification_metrics(frame: pd.DataFrame) -> dict[str, object]:
         frame: Row-level class labels and probabilities.
 
     Returns:
-        Overall scores, per-class recall, and a confusion matrix.
+        Overall scores, per-class scores, and a confusion matrix.
     """
     truth = frame[TRUE_CLASS_COL].to_numpy(dtype=np.int64)
     predicted = frame[PREDICTED_CLASS_COL].to_numpy(dtype=np.int64)
     probabilities = frame.loc[:, PROBABILITY_COLUMNS].to_numpy(dtype=np.float64)
     labels = np.arange(len(MODEL_CLASS_NAMES))
+    class_f1 = f1_score(truth, predicted, labels=labels, average=None, zero_division=0)
     confusion = confusion_matrix(truth, predicted, labels=labels)
     class_totals = confusion.sum(axis=1)
     recalls = np.divide(
@@ -56,6 +57,7 @@ def classification_metrics(frame: pd.DataFrame) -> dict[str, object]:
         "predicted_class_frequencies": {
             name: float(np.mean(predicted == index)) for index, name in enumerate(MODEL_CLASS_NAMES)
         },
+        "class_f1": {name: float(class_f1[index]) for index, name in enumerate(MODEL_CLASS_NAMES)},
         "class_recall": {name: float(recalls[index]) for index, name in enumerate(MODEL_CLASS_NAMES)},
         "confusion_matrix": confusion.tolist(),
     }

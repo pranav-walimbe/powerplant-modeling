@@ -99,14 +99,15 @@ sbatch scripts/slurm/train_model.sh
 ## Evaluation and artifacts
 
 `results.json` reports accuracy, balanced accuracy, macro F1, macro one-vs-rest
-AUROC, per-class recall, confusion matrices, and predicted-class frequencies.
+AUROC, per-class F1, per-class recall, confusion matrices, and predicted-class
+frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
 The trainer produces three figures:
 
-- `split_class_accuracy.png` compares balanced accuracy and per-class recall
-  with class support for every split;
+- `split_class_f1.png` compares macro F1 and per-class F1 with class support for
+  every split;
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.

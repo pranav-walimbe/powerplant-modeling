@@ -34,7 +34,7 @@ from modeling.eval_utils import (
     save_results,
 )
 from modeling.mlp import SeasonalMLP
-from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_accuracy, plot_training_curves
+from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_f1, plot_training_curves
 from modeling.transport import TransportConfig, TransportTransform
 from sklearn.metrics import f1_score
 from torch import nn
@@ -765,7 +765,7 @@ def main() -> None:
     for split, frame in shuffled_context_frames.items():
         frame.to_csv(run_dir / f"vision_shuffled_{split}_predictions.csv", index=False)
 
-    plot_split_class_accuracy(model_frames, run_dir)
+    plot_split_class_f1(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")
