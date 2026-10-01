@@ -105,20 +105,7 @@ does not rebalance after raster filtering, and emails a plot of the surviving
 emissions trajectories and exact class counts by split. See
 [regridding.md](regridding.md).
 
-## 4. Compute AOI-specific NO2 normalization
-
-After dataset finalization, compute the robust NO2 center and scale for every
-AOI in the published splits:
-
-```bash
-sbatch scripts/slurm/aoi_normalization.sh
-```
-
-The job samples up to 40 TEMPO rasters per AOI and calendar month, reuses the
-persistent TEMPO cache, and writes `aoi-no2-normalization.json` under the
-dataset root. Delta training requires this file.
-
-## 5. Provide a masked-model checkpoint
+## 4. Provide a masked-model checkpoint
 
 Delta training uses a masked NO2 checkpoint to fill missing NO2 pixels before
 classifier training. It does not copy the masked encoder into the classifier. Set
@@ -128,7 +115,7 @@ classifier training. It does not copy the masked encoder into the classifier. Se
 The masked-pretraining workflow lives in
 [masked-pretraining/setup-and-pipeline.md](../masked-pretraining/setup-and-pipeline.md).
 
-## 6. Train and evaluate
+## 5. Train and evaluate
 
 Submit the maintained launcher:
 
@@ -136,8 +123,9 @@ Submit the maintained launcher:
 sbatch scripts/slurm/train_model.sh
 ```
 
-The job stages split metadata in job-local `/tmp`, fills missing NO2 into
-temporary memory-mapped arrays, and trains two classifiers:
+The job stages split metadata in job-local `/tmp`, fits global raster
+normalization on the training split, fills missing NO2 into temporary
+memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;
 - a vision model with scale-only context modulation of observation and
@@ -156,7 +144,6 @@ run. See [modeling.md](modeling.md) for the model contract.
 | TEMPO observations | `build_tempo_mapping_observations.sh` | `0-31%14`, 4 CPUs, 8 hours |
 | Stratification | `stratify_plants.sh` | 16 CPUs, 30 minutes, high-memory node |
 | Dataset shards | `launch_dataset_generation.sh` | Up to 8 tasks, 8 CPUs each, 12 hours |
-| AOI normalization | `aoi_normalization.sh` | 16 CPUs, 8 hours, high-memory node |
 | Masked pretraining | `train_masked_pretraining.sh` | 1 A5000, 4 CPUs, 8 hours |
 | Delta classification | `train_model.sh` | 1 A5000, 4 CPUs, 2 hours |
 

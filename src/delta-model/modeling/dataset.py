@@ -15,7 +15,6 @@ from modeling.transport import TransportTransform
 from torch.utils.data import Dataset
 
 from config import (
-    DATASET_AOI_NORMALIZATION_STATS,
     DATASET_DF,
     DATASET_DIR,
     MODEL_CLASS_NAMES,
@@ -52,8 +51,6 @@ class NormalizationStats:
     image_center: tuple[float, ...]
     image_scale: tuple[float, ...]
     image_valid_pixels: tuple[int, ...]
-    aoi_no2_median: dict[str, float]
-    aoi_no2_scale: dict[str, float]
     feature_names: tuple[str, ...]
     feature_mean: tuple[float, ...]
     feature_std: tuple[float, ...]
@@ -83,8 +80,6 @@ class NormalizationStats:
             image_center=tuple(float(value) for value in values["image_center"]),
             image_scale=tuple(float(value) for value in values["image_scale"]),
             image_valid_pixels=tuple(int(value) for value in values["image_valid_pixels"]),
-            aoi_no2_median={str(key): float(value) for key, value in values["aoi_no2_median"].items()},
-            aoi_no2_scale={str(key): float(value) for key, value in values["aoi_no2_scale"].items()},
             feature_names=tuple(str(name) for name in values["feature_names"]),
             feature_mean=tuple(float(value) for value in values["feature_mean"]),
             feature_std=tuple(float(value) for value in values["feature_std"]),
@@ -190,26 +185,6 @@ def _safe_scale(values: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(values) & (values > MIN_SCALE), values, 1.0)
 
 
-def _load_aoi_no2_stats(path: Path) -> tuple[dict[str, float], dict[str, float]]:
-    # Load the robust AOI centers and scales produced by preprocessing
-    with path.open() as source:
-        values = json.load(source)
-    medians = {str(aoi_id): float(fields["median"]) for aoi_id, fields in values.items()}
-    scales = {str(aoi_id): float(fields["scale"]) for aoi_id, fields in values.items()}
-    return medians, scales
-
-
-def _image_normalization(stats: NormalizationStats, aoi_id: int, aoi_normalize_no2: bool) -> tuple[np.ndarray, ...]:
-    # Resolve global weather statistics and the optional AOI-specific NO2 statistics
-    center = np.asarray(stats.image_center, dtype=np.float32).copy()
-    scale = np.asarray(stats.image_scale, dtype=np.float32).copy()
-    if aoi_normalize_no2:
-        key = str(aoi_id)
-        center[NO2_CHANNEL] = stats.aoi_no2_median[key]
-        scale[NO2_CHANNEL] = stats.aoi_no2_scale[key]
-    return center, scale
-
-
 def _channel_valid_mask(rasters: np.ndarray, channel: int) -> np.ndarray:
     # Identify valid pixels for one numeric image channel
     return np.isfinite(rasters[:, channel])
@@ -310,8 +285,6 @@ def compute_stats(
     dataset_dir: str | Path = DATASET_DIR,
     dataframe_dir: str | Path = DATASET_DF,
     progress_interval: int = 1_000,
-    fixed_image_stats: dict[str, object] | None = None,
-    aoi_normalization_path: str | Path = DATASET_AOI_NORMALIZATION_STATS,
 ) -> NormalizationStats:
     """Compute memory-bounded normalization statistics from one split.
 
@@ -320,8 +293,6 @@ def compute_stats(
         dataset_dir: Root containing raster bundles.
         dataframe_dir: Directory containing split CSV files.
         progress_interval: Records between progress messages.
-        fixed_image_stats: Existing raster normalization to combine with split seasonal statistics.
-        aoi_normalization_path: JSON containing robust NO2 statistics for every modeled AOI.
 
     Returns:
         Frozen image and seasonal normalization statistics.
@@ -330,23 +301,13 @@ def compute_stats(
     frame = _read_split_frame(split, Path(dataframe_dir))
     features = _feature_matrix(frame)
     raster_paths = frame[RASTER_PATH_COL].to_numpy(dtype=str)
-    if fixed_image_stats is None:
-        image_keys = MODEL_IMAGE_KEYS
-        image_center, image_scale, image_valid_pixels = _fit_image_stats(raster_paths, root, progress_interval)
-    else:
-        image_keys = tuple(str(name) for name in fixed_image_stats["image_keys"])
-        image_center = tuple(float(value) for value in fixed_image_stats["image_center"])
-        image_scale = tuple(float(value) for value in fixed_image_stats["image_scale"])
-        image_valid_pixels = tuple(int(value) for value in fixed_image_stats["image_valid_pixels"])
-    aoi_no2_median, aoi_no2_scale = _load_aoi_no2_stats(Path(aoi_normalization_path))
+    image_center, image_scale, image_valid_pixels = _fit_image_stats(raster_paths, root, progress_interval)
     feature_std = _safe_scale(features.std(axis=0))
     return NormalizationStats(
-        image_keys=image_keys,
+        image_keys=MODEL_IMAGE_KEYS,
         image_center=tuple(float(value) for value in image_center),
         image_scale=tuple(float(value) for value in image_scale),
         image_valid_pixels=tuple(int(value) for value in image_valid_pixels),
-        aoi_no2_median=aoi_no2_median,
-        aoi_no2_scale=aoi_no2_scale,
         feature_names=MODEL_FEATURE_NAMES,
         feature_mean=tuple(float(value) for value in features.mean(axis=0)),
         feature_std=tuple(float(value) for value in feature_std),
@@ -377,9 +338,10 @@ def clipped_pixel_fractions(
     frame = _read_split_frame(split, Path(dataframe_dir))
     clipped = np.zeros(len(MODEL_IMAGE_KEYS), dtype=np.int64)
     valid = np.zeros(len(MODEL_IMAGE_KEYS), dtype=np.int64)
-    for aoi_id, serialized_path in zip(frame["aoi_id"], frame[RASTER_PATH_COL], strict=True):
+    center = np.asarray(stats.image_center)
+    scale = np.asarray(stats.image_scale)
+    for serialized_path in frame[RASTER_PATH_COL]:
         rasters = _load_rasters(_raster_path(serialized_path, root))
-        center, scale = _image_normalization(stats, int(aoi_id), True)
         for channel in range(len(MODEL_IMAGE_KEYS)):
             values = _valid_channel_values(rasters, channel)
             normalized = (values - center[channel]) / scale[channel]
@@ -431,33 +393,33 @@ class NOxDataset(Dataset):
         dataframe_dir: str | Path = DATASET_DF,
         load_images: bool = True,
         completed_raster_path: str | Path | None = None,
-        aoi_normalize_no2: bool = True,
+        source_image_stats: dict[str, object] | None = None,
         transport_transform: TransportTransform | None = None,
         per_timestep_context: bool = False,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
-        self.aoi_normalize_no2 = aoi_normalize_no2
         self.transport_transform = transport_transform
         self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
-        self.aoi_ids = pd.to_numeric(self.frame["aoi_id"], errors="raise").to_numpy(dtype=np.int64)
-        no2_normalization = [
-            _image_normalization(self.stats, int(aoi_id), self.aoi_normalize_no2)
-            for aoi_id in self.aoi_ids
-        ]
-        self.no2_normalization = np.asarray(
-            [(center[NO2_CHANNEL], scale[NO2_CHANNEL]) for center, scale in no2_normalization],
-            dtype=np.float32,
-        )
+        self.image_center = np.asarray(self.stats.image_center, dtype=np.float32)
+        self.image_scale = np.asarray(self.stats.image_scale, dtype=np.float32)
+        source_stats = source_image_stats or self.stats.to_dict()
+        self.source_image_center = np.asarray(source_stats["image_center"], dtype=np.float32)
+        self.source_image_scale = np.asarray(source_stats["image_scale"], dtype=np.float32)
+        self.no2_normalization = np.broadcast_to(
+            np.asarray(
+                (self.image_center[NO2_CHANNEL], self.image_scale[NO2_CHANNEL]),
+                dtype=np.float32,
+            ),
+            (len(self.frame), 2),
+        ).copy()
 
         raw_features = (
-            _timestep_feature_matrix(self.frame)
-            if self.per_timestep_context
-            else _feature_matrix(self.frame)
+            _timestep_feature_matrix(self.frame) if self.per_timestep_context else _feature_matrix(self.frame)
         )
         feature_mean = np.asarray(self.stats.feature_mean, dtype=np.float64)
         feature_std = np.asarray(self.stats.feature_std, dtype=np.float64)
@@ -486,27 +448,26 @@ class NOxDataset(Dataset):
                 if self._completed_rasters is None:
                     self._completed_rasters = np.load(self.completed_raster_path, mmap_mode="r")
                 completed = np.array(self._completed_rasters[index], copy=True)
-                if self.aoi_normalize_no2:
-                    global_center, global_scale = _image_normalization(self.stats, int(self.aoi_ids[index]), False)
-                    aoi_center, aoi_scale = _image_normalization(self.stats, int(self.aoi_ids[index]), True)
-                    physical_no2 = completed[:, NO2_CHANNEL] * global_scale[NO2_CHANNEL] + global_center[NO2_CHANNEL]
-                    completed[:, NO2_CHANNEL] = (physical_no2 - aoi_center[NO2_CHANNEL]) / aoi_scale[NO2_CHANNEL]
-                    np.clip(completed, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=completed)
+                numeric = completed[:, : len(MODEL_IMAGE_KEYS)]
+                source_center = self.source_image_center[None, :, None, None]
+                source_scale = self.source_image_scale[None, :, None, None]
+                physical = numeric * source_scale + source_center
+                center = self.image_center[None, :, None, None]
+                scale = self.image_scale[None, :, None, None]
+                numeric[:] = (physical - center) / scale
+                np.clip(completed, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=completed)
                 image = torch.from_numpy(completed)
             else:
                 raster_path = _raster_path(self.raster_paths[index], self.dataset_dir)
                 rasters, masks = _load_raster_bundle(raster_path)
-                center, scale = _image_normalization(
-                    self.stats,
-                    int(self.aoi_ids[index]),
-                    self.aoi_normalize_no2,
-                )
                 normalized = np.zeros_like(rasters, dtype=np.float32)
                 for channel in range(len(MODEL_IMAGE_KEYS)):
                     channel_valid = _channel_valid_mask(rasters, channel)
                     channel_values = rasters[:, channel][channel_valid]
                     normalized_channel = normalized[:, channel]
-                    normalized_channel[channel_valid] = (channel_values - center[channel]) / scale[channel]
+                    normalized_channel[channel_valid] = (
+                        channel_values - self.source_image_center[channel]
+                    ) / self.source_image_scale[channel]
                 np.clip(normalized, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=normalized)
                 image = torch.from_numpy(np.concatenate((normalized, masks), axis=1))
         else:

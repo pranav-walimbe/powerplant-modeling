@@ -28,14 +28,17 @@ training-split statistics.
 ## Raster completion and quality
 
 The masked model uses its checkpoint's global statistics to fill NO2. Training
-stores five channels in job-local memory-mapped arrays: the four completed
-physical inputs plus the original NO2 mask. Observed pixels receive quality 1;
-filled pixels receive quality 0. The classifier processes every filled value
-and uses quality as a separate input channel.
+stores five channels in job-local memory-mapped arrays: four inputs in the
+masked model's normalized space plus the original NO2 mask. Observed pixels
+receive quality 1; filled pixels receive quality 0. The classifier processes
+every filled value and uses quality as a separate input channel.
 
-The classifier applies AOI-specific median and robust scale to NO2. It uses the
-masked checkpoint's global mean and standard deviation for temperature and
-wind. Training fits all normalization state on the training split.
+The masked model's checkpoint statistics are used only during raster
+completion. The pipeline fits a global median and robust scale to
+training-split NO2. It also fits global means and standard deviations to
+training-split temperature and wind. The completed train, validation, and test
+rasters are converted from the masked model's normalized space into this
+frozen classifier normalization.
 
 ## Transport residuals
 
