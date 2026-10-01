@@ -16,7 +16,6 @@ from modeling.convgru import (
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
-    MAX_CONTEXT_SCALE_DELTA,
     VisionClassifier,
 )
 from modeling.dataset import (
@@ -41,7 +40,6 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from config import (
-    DATASET_AOI_NORMALIZATION_STATS,
     MODEL_CLASS_NAMES,
     MODEL_IMAGE_CLIP_ABS,
     MODEL_IMAGE_KEYS,
@@ -443,11 +441,14 @@ def main() -> None:
     print(f"Training seasonal and vision classifiers on {device}; outputs: {run_dir}")
 
     masked_model_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
-    stats = compute_stats("train", fixed_image_stats=masked_model_checkpoint["normalization_stats"])
+    masked_image_stats = masked_model_checkpoint["normalization_stats"]
+    stats = compute_stats("train")
     del masked_model_checkpoint
     save_stats(stats, run_dir / "normalization_stats.json")
 
-    source_datasets = {split: NOxDataset(split, stats, aoi_normalize_no2=False) for split in ("train", "val", "test")}
+    source_datasets = {
+        split: NOxDataset(split, stats, source_image_stats=masked_image_stats) for split in ("train", "val", "test")
+    }
     masked_checkpoint_sha256 = _checkpoint_sha256(masked_checkpoint_path)
     completed_dir = completed_root / run_name
     completed_paths = _fill_missing_rasters(
@@ -462,7 +463,12 @@ def main() -> None:
         torch.cuda.empty_cache()
 
     datasets = {
-        split: NOxDataset(split, stats, completed_raster_path=completed_paths[split])
+        split: NOxDataset(
+            split,
+            stats,
+            completed_raster_path=completed_paths[split],
+            source_image_stats=masked_image_stats,
+        )
         for split in ("train", "val", "test")
     }
     transport_stats_loader = _loader(
@@ -484,6 +490,7 @@ def main() -> None:
             split,
             stats,
             completed_raster_path=completed_paths[split],
+            source_image_stats=masked_image_stats,
             transport_transform=transport_transform,
             per_timestep_context=True,
         )
@@ -561,9 +568,8 @@ def main() -> None:
         checkpoint_metadata={
             **common_checkpoint_metadata,
             "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-            "context_fusion": "bounded_scale_only_film_per_timestep",
+            "context_fusion": "scale_and_shift_film_per_timestep",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-            "maximum_context_scale_delta": MAX_CONTEXT_SCALE_DELTA,
             "model_width": args.model_width,
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
@@ -600,9 +606,8 @@ def main() -> None:
         "encoder_initialization": "random",
         "loss": "unweighted_hard_cross_entropy",
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-        "context_fusion": "bounded_scale_only_film_per_timestep",
+        "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-        "maximum_context_scale_delta": MAX_CONTEXT_SCALE_DELTA,
     }
     del vision_model, vision_train_loader
     if device.type == "cuda":
@@ -641,9 +646,9 @@ def main() -> None:
         "quality_keys": ["no2_mask", "transport_residual_quality"],
         "image_center": list(stats.image_center),
         "image_scale": list(stats.image_scale),
-        "no2_normalization": "aoi_specific_median_robust_scale",
-        "aoi_normalization_stats": DATASET_AOI_NORMALIZATION_STATS,
-        "weather_normalization": "global_pretrained_model_stats",
+        "raster_normalization": "global_training_split_statistics",
+        "no2_normalization": "training_split_median_robust_scale",
+        "weather_normalization": "training_split_mean_standard_deviation",
         "image_clip_range": [-MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS],
         "target_name": MODEL_TARGET_COL,
         "class_names": list(MODEL_CLASS_NAMES),
@@ -665,12 +670,12 @@ def main() -> None:
         },
         "context_fusion": {
             "location": "branch_spatial_bottlenecks_at_each_timestep",
-            "method": "bounded_scale_only_film",
+            "method": "scale_and_shift_film",
+            "parameterization": "gamma_equals_one_plus_delta_gamma_beta_equals_delta_beta",
             "initial_timestep_context": True,
             "identity_initialized": True,
-            "additive_shift": False,
+            "additive_shift": True,
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
-            "maximum_scale_delta": MAX_CONTEXT_SCALE_DELTA,
         },
     }
     with (run_dir / "run_config.json").open("w") as destination:

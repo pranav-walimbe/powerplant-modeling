@@ -28,14 +28,17 @@ training-split statistics.
 ## Raster completion and quality
 
 The masked model uses its checkpoint's global statistics to fill NO2. Training
-stores five channels in job-local memory-mapped arrays: the four completed
-physical inputs plus the original NO2 mask. Observed pixels receive quality 1;
-filled pixels receive quality 0. The classifier processes every filled value
-and uses quality as a separate input channel.
+stores five channels in job-local memory-mapped arrays: four inputs in the
+masked model's normalized space plus the original NO2 mask. Observed pixels
+receive quality 1; filled pixels receive quality 0. The classifier processes
+every filled value and uses quality as a separate input channel.
 
-The classifier applies AOI-specific median and robust scale to NO2. It uses the
-masked checkpoint's global mean and standard deviation for temperature and
-wind. Training fits all normalization state on the training split.
+The masked model's checkpoint statistics are used only during raster
+completion. The pipeline fits a global median and robust scale to
+training-split NO2. It also fits global means and standard deviations to
+training-split temperature and wind. The completed train, validation, and test
+rasters are converted from the masked model's normalized space into this
+frozen classifier normalization.
 
 ## Transport residuals
 
@@ -64,13 +67,13 @@ The training job fits these models:
 The observation branch processes five frames. The residual branch processes
 four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
 sine/cosine at each observation timestamp. Separate zero-initialized heads
-produce bounded channel-wise scale changes for the observation and residual
-spatial bottlenecks. The first observation is scaled with its own context and
-initializes the temporal state without a synthetic residual. Each later
-observation and aligned residual are scaled with that timestep's context,
-fused with a `1 x 1` projection, and passed into the shared ConvGRU.
+produce bounded channel-wise scale and shift values for the observation and
+residual spatial bottlenecks. The first observation is modulated with its own
+context and initializes the temporal state without a synthetic residual. Each
+later observation and aligned residual are modulated with that timestep's
+context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 
-This is identity-initialized scale-only FiLM without an additive shift.
+This is identity-initialized FiLM with unbounded scale and additive shift.
 Training drops the full context sequence for a random share of samples. The
 job also saves predictions and metrics from shuffled-context inference.
 
