@@ -128,7 +128,7 @@ normalization on the training split, fills missing NO2 into temporary
 memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;
-- a vision model with scale-only context modulation of observation and
+- a vision model with scale-and-shift context modulation of observation and
   advection-residual features at each timestep.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on

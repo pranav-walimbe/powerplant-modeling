@@ -67,13 +67,13 @@ The training job fits these models:
 The observation branch processes five frames. The residual branch processes
 four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
 sine/cosine at each observation timestamp. Separate zero-initialized heads
-produce bounded channel-wise scale changes for the observation and residual
-spatial bottlenecks. The first observation is scaled with its own context and
-initializes the temporal state without a synthetic residual. Each later
-observation and aligned residual are scaled with that timestep's context,
-fused with a `1 x 1` projection, and passed into the shared ConvGRU.
+produce bounded channel-wise scale and shift values for the observation and
+residual spatial bottlenecks. The first observation is modulated with its own
+context and initializes the temporal state without a synthetic residual. Each
+later observation and aligned residual are modulated with that timestep's
+context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 
-This is identity-initialized scale-only FiLM without an additive shift.
+This is identity-initialized FiLM with bounded scale and additive shift.
 Training drops the full context sequence for a random share of samples. The
 job also saves predictions and metrics from shuffled-context inference.
 
