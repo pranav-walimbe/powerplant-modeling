@@ -25,5 +25,9 @@ Records are the number of true examples for each class in the split.
 
 ## Experiment log
 
-| Experiment | Run ID | Status | Notes |
-|---|---|---|---|
+| Design tested | Run ID | Seasonal test macro F1 | Vision test macro F1 |
+|---|---|---:|---:|
+| Freeze the trained seasonal model and train the unchanged vision model to predict additive corrections to its logits | `delta_logit_correction_20261001_063646` | 0.4938 | 0.5351 |
+| Remove additive FiLM shifts so seasonal context can only rescale each branch's per-timestep features | `delta_scale_only_film_20261001_070955` | 0.4938 | 0.5424 |
+| Remove FiLM and concatenate the midpoint seasonal embedding with the temporally aggregated visual embedding | `delta_no_film_20261001_074126` | 0.4938 | 0.5416 |
+| Increase the baseline FiLM vision model width from 48 to 64 while keeping the classifier head width at 48 | `delta_model_width_64_20261001_080816` | 0.4938 | 0.5514 |
