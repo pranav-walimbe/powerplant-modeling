@@ -55,9 +55,10 @@ quality-weighted residual mean and standard deviation.
 
 The maintained configuration blends endpoint winds equally, scales wind speed
 by 0.8, disperses the transported enhancement with a one-hour width of one
-pixel, and applies an eight-hour effective decay lifetime. Elevated-wind and
-plume-rise inputs remain disabled. The run and checkpoint metadata record
-these active values directly from the transport configuration.
+pixel, and applies an eight-hour effective decay lifetime. The transform can
+accept externally supplied interval winds, but the pipeline does not implement
+elevated-wind selection or plume rise. The run and checkpoint metadata record
+the active transport values directly from the transport configuration.
 
 ## Models
 

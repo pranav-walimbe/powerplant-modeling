@@ -740,7 +740,6 @@ def main() -> None:
             "method": "backward_semi_lagrangian_bilinear",
             "wind": "endpoint_blended_80m_wind",
             "residual": "current_minus_advected_prior",
-            "elevated_wind_enabled": False,
             "residual_quality": "current_no2_quality_times_warped_source_no2_quality",
             "residual_normalization": transport_residual_stats,
             **transport_config.to_metadata(),
