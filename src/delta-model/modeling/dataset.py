@@ -396,6 +396,9 @@ class NOxDataset(Dataset):
         source_image_stats: dict[str, object] | None = None,
         transport_transform: TransportTransform | None = None,
         per_timestep_context: bool = False,
+        delta_target_path: str | Path | None = None,
+        delta_target_center: float = 0.0,
+        delta_target_scale: float = 1.0,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.load_images = load_images
@@ -403,6 +406,10 @@ class NOxDataset(Dataset):
         self.transport_transform = transport_transform
         self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
+        self.delta_target_path = Path(delta_target_path) if delta_target_path else None
+        self.delta_target_center = float(delta_target_center)
+        self.delta_target_scale = float(delta_target_scale)
+        self._delta_targets: np.ndarray | None = None
         self.frame = _read_split_frame(split, Path(dataframe_dir))
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.image_center = np.asarray(self.stats.image_center, dtype=np.float32)
@@ -482,10 +489,17 @@ class NOxDataset(Dataset):
                 no2_normalization,
             )
             transport = torch.cat((residual, quality), dim=2).squeeze(0)
-        return (
+        item = (
             image,
             torch.from_numpy(self.features[index]),
             transport,
             torch.tensor(self.labels[index]),
             index,
         )
+        if self.delta_target_path is None:
+            return item
+        if self._delta_targets is None:
+            self._delta_targets = np.load(self.delta_target_path, mmap_mode="r")
+        target = np.array(self._delta_targets[index], dtype=np.float32, copy=True)
+        normalized_target = (target - self.delta_target_center) / self.delta_target_scale
+        return (*item, torch.from_numpy(normalized_target))

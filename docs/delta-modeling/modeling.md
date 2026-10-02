@@ -15,7 +15,7 @@ mask, so it can distinguish observations from filled values.
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
 | Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
-| Loss | Training-prevalence-weighted three-class cross-entropy |
+| Loss | Weighted class cross-entropy plus an unweighted auxiliary raster L1 loss |
 | Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
@@ -65,7 +65,7 @@ the active transport values directly from the transport configuration.
 The training job fits these models:
 
 - `seasonal`: the context-only MLP diagnostic;
-- `vision`: the context-aware observation and transport-residual classifier.
+- `vision`: the joint context-aware class and delta-raster predictor.
 
 The observation branch processes five frames. The residual branch processes
 four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
@@ -75,6 +75,8 @@ residual spatial bottlenecks. The first observation is modulated with its own
 context and initializes the temporal state without a synthetic residual. Each
 later observation and aligned residual are modulated with that timestep's
 context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
+The classifier pools the final recurrent map. A separate decoder upsamples the
+same map into a `12 x 12` delta raster. The model width is 64.
 
 This is identity-initialized FiLM with unbounded scale and additive shift.
 Training drops the full context sequence for a random share of samples. The
@@ -84,11 +86,18 @@ job also saves predictions and metrics from shuffled-context inference.
 
 All classifiers use inverse-frequency class weights computed only from the
 training split. Each class therefore contributes equal total weight to the
-cross-entropy objective. Validation macro F1 controls checkpointing and early
-stopping. Training-weighted validation cross-entropy breaks macro-F1 ties and
-drives the learning-rate scheduler. The maintained launcher uses batch size
-128, model width 48, head width 48, dropout 0.30, and seed 42. These rules are
-fixed without a parameter-selection run.
+cross-entropy objective. The joint model adds the mean absolute error over all
+pixels in the normalized target raster without quality weighting. Its total
+loss is `CE + lambda * L1`; `RASTER_LOSS_WEIGHT` configures `lambda` and
+defaults to 1.0. Input NO2 and residual-quality rasters remain unchanged.
+The `TARGET_SMOOTHING_SIGMA` launcher setting controls Gaussian target
+smoothing in 12 x 12 grid cells and defaults to 1.5.
+
+Validation macro F1 controls checkpointing and early stopping.
+Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
+learning-rate scheduler. The maintained launcher uses batch size 128, model
+width 64, head width 48, dropout 0.30, and seed 42. These rules are fixed
+without a parameter-selection run.
 
 Run the production workflow with:
 
@@ -104,13 +113,16 @@ frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
-The trainer produces three figures:
+The trainer produces four figures:
 
 - `split_class_f1.png` compares macro F1 and per-class F1 with class support for
   every split;
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.
+- `joint_prediction_samples.png` shows 20 deterministic test examples with all
+  five NO2 inputs, four transport residuals, the true class and target raster,
+  and the predicted class and raster.
 
 The test plots describe the fixed model and do not participate in model
 selection.
