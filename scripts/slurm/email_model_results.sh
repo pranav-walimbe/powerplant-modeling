@@ -15,11 +15,13 @@ mail_log="/var/log/maillog"
 class_f1_plot="${run_dir}/split_class_f1.png"
 loss_plot="${run_dir}/training_curves.png"
 characteristic_plot="${run_dir}/accuracy_by_characteristic.png"
+joint_samples_plot="${run_dir}/joint_prediction_samples.png"
 
 for artifact in \
     "${class_f1_plot}" \
     "${loss_plot}" \
-    "${characteristic_plot}"; do
+    "${characteristic_plot}" \
+    "${joint_samples_plot}"; do
     if [[ ! -s "${artifact}" ]]; then
         echo "Expected result artifact is missing or empty: ${artifact}" >&2
         exit 1
@@ -29,12 +31,13 @@ done
 echo "Emailing seasonal and vision-model results to ${recipient} via ${mail_host}"
 mail_log_offset=$(ssh -o BatchMode=yes -o ConnectTimeout=15 \
     "${mail_host}" stat -c %s "${mail_log}")
-printf 'NO2 classification training completed successfully.\n\nThe attachments compare seasonal and context-aware vision models. Evaluation slices include AOI characteristics, test month, and test midpoint local solar hour.\n\nRun: %s\nJob: %s\n' \
+printf 'NO2 classification training completed successfully.\n\nThe attachments compare seasonal and context-aware vision models. The final image shows 20 test examples with NO2 inputs, transport residuals, true targets, and joint predictions.\n\nRun: %s\nJob: %s\n' \
     "${run_dir}" \
     "${job_id}" \
     | ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \
         "mailx -s 'NO2 classification results (${job_id})' \
-            -a '${class_f1_plot}' -a '${loss_plot}' -a '${characteristic_plot}' '${recipient}'"
+            -a '${class_f1_plot}' -a '${loss_plot}' -a '${characteristic_plot}' \
+            -a '${joint_samples_plot}' '${recipient}'"
 
 delivery_confirmed=false
 for _ in {1..30}; do

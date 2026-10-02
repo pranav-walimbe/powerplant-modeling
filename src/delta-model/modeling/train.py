@@ -35,7 +35,12 @@ from modeling.eval_utils import (
     save_results,
 )
 from modeling.mlp import SeasonalMLP
-from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_class_f1, plot_training_curves
+from modeling.plot_utils import (
+    plot_accuracy_by_characteristic,
+    plot_joint_prediction_samples,
+    plot_split_class_f1,
+    plot_training_curves,
+)
 from modeling.transport import TransportConfig, TransportTransform
 from sklearn.metrics import f1_score
 from torch import nn
@@ -70,6 +75,7 @@ DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
 DEFAULT_RASTER_LOSS_WEIGHT = 1.0
 DEFAULT_TARGET_SMOOTHING_SIGMA = 1.5
+JOINT_PLOT_SAMPLE_COUNT = 20
 DELTA_TARGET_SIZE = 12
 DELTA_TARGET_UPWIND_FRACTION = 1.0 / 3.0
 DELTA_TARGET_MIN_WIND_SPEED_MPS = 0.5
@@ -797,11 +803,12 @@ def run_inference(
     device: torch.device,
     *,
     context_permutation: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Generate logits and probabilities for one dataset split."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Generate class outputs and optional raster predictions for one split."""
     model.eval()
     logits_batches: list[np.ndarray] = []
     probability_batches: list[np.ndarray] = []
+    raster_batches: list[np.ndarray] = []
     indices: list[np.ndarray] = []
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
@@ -815,12 +822,22 @@ def run_inference(
                 )
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
                 output = model(image, seasonal, transport)
-                logits = output[0] if isinstance(output, tuple) else output
+                if isinstance(output, tuple):
+                    logits, raster_prediction = output
+                    raster_batches.append(raster_prediction.float().cpu().numpy())
+                else:
+                    logits = output
             logits = logits.float()
             logits_batches.append(logits.cpu().numpy())
             probability_batches.append(logits.softmax(dim=1).cpu().numpy())
             indices.append(index.numpy())
-    return np.concatenate(logits_batches), np.concatenate(probability_batches), np.concatenate(indices)
+    raster_predictions = np.concatenate(raster_batches) if raster_batches else np.empty(0, dtype=np.float32)
+    return (
+        np.concatenate(logits_batches),
+        np.concatenate(probability_batches),
+        np.concatenate(indices),
+        raster_predictions,
+    )
 
 
 def _loader(dataset: NOxDataset, *, shuffle: bool, args: argparse.Namespace, device: torch.device) -> DataLoader:
@@ -853,6 +870,47 @@ def _prediction_frame(
     for column, values in zip(PROBABILITY_COLUMNS, probabilities.T, strict=True):
         frame[column] = values
     return frame
+
+
+def _joint_prediction_sample_arrays(
+    dataset: NOxDataset,
+    indices: np.ndarray,
+    probabilities: np.ndarray,
+    raster_predictions: np.ndarray,
+    transport_residual_stats: dict[str, float],
+    seed: int,
+) -> tuple[np.ndarray, ...]:
+    # Collect deterministic test examples in physical units
+    rng = np.random.default_rng(seed)
+    positions = np.sort(rng.choice(len(indices), size=JOINT_PLOT_SAMPLE_COUNT, replace=False))
+    sample_indices = indices[positions]
+    records = [dataset[int(index)] for index in sample_indices]
+    images = np.stack([record[0].numpy() for record in records])
+    transport = np.stack([record[2].numpy() for record in records])
+    normalized_targets = np.stack([record[5].numpy() for record in records])
+
+    no2_channel = MODEL_IMAGE_KEYS.index("no2")
+    no2_rasters = images[:, :, no2_channel]
+    no2_rasters = no2_rasters * dataset.image_scale[no2_channel] + dataset.image_center[no2_channel]
+    transport_residuals = transport[:, :, 0]
+    transport_residuals = (
+        transport_residuals * transport_residual_stats["scale"]
+        + transport_residual_stats["center"]
+    )
+    target_rasters = normalized_targets * dataset.delta_target_scale + dataset.delta_target_center
+    predicted_rasters = (
+        raster_predictions[positions] * dataset.delta_target_scale + dataset.delta_target_center
+    )
+    true_classes = dataset.labels[sample_indices]
+    predicted_classes = probabilities[positions].argmax(axis=1)
+    return (
+        no2_rasters,
+        transport_residuals,
+        target_rasters,
+        predicted_rasters,
+        true_classes,
+        predicted_classes,
+    )
 
 
 def _class_counts(dataset: NOxDataset) -> dict[str, int]:
@@ -1010,7 +1068,7 @@ def main() -> None:
     )
     seasonal_frames = {}
     for split, loader in seasonal_eval_loaders.items():
-        logits, probabilities, indices = run_inference(seasonal_model, loader, device)
+        logits, probabilities, indices, _ = run_inference(seasonal_model, loader, device)
         seasonal_frames[split] = _prediction_frame(seasonal_datasets[split], logits, probabilities, indices)
     training_summaries["seasonal"] = {
         "maximum_epochs": args.seasonal_epochs,
@@ -1070,11 +1128,21 @@ def main() -> None:
     )
     vision_frames = {}
     shuffled_context_frames: dict[str, pd.DataFrame] = {}
+    joint_sample_arrays: tuple[np.ndarray, ...] = ()
     for split, loader in transport_eval_loaders.items():
-        logits, probabilities, indices = run_inference(vision_model, loader, device)
+        logits, probabilities, indices, raster_predictions = run_inference(vision_model, loader, device)
         vision_frames[split] = _prediction_frame(transport_datasets[split], logits, probabilities, indices)
+        if split == "test":
+            joint_sample_arrays = _joint_prediction_sample_arrays(
+                transport_datasets[split],
+                indices,
+                probabilities,
+                raster_predictions,
+                transport_residual_stats,
+                args.seed,
+            )
         permutation = np.random.default_rng(args.seed).permutation(len(transport_datasets[split]))
-        shuffled_logits, shuffled_probabilities, shuffled_indices = run_inference(
+        shuffled_logits, shuffled_probabilities, shuffled_indices, _ = run_inference(
             vision_model,
             loader,
             device,
@@ -1202,6 +1270,7 @@ def main() -> None:
     plot_split_class_f1(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
+    plot_joint_prediction_samples(*joint_sample_arrays, run_dir=run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")
 
 

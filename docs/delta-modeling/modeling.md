@@ -113,13 +113,16 @@ frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
-The trainer produces three figures:
+The trainer produces four figures:
 
 - `split_class_f1.png` compares macro F1 and per-class F1 with class support for
   every split;
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.
+- `joint_prediction_samples.png` shows 20 deterministic test examples with all
+  five NO2 inputs, four transport residuals, the true class and target raster,
+  and the predicted class and raster.
 
 The test plots describe the fixed model and do not participate in model
 selection.

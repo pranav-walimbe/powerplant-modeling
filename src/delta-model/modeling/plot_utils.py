@@ -344,3 +344,100 @@ def plot_accuracy_by_characteristic(
     )
     figure.tight_layout()
     _save(figure, run_dir, "accuracy_by_characteristic")
+
+
+def plot_joint_prediction_samples(
+    no2_rasters: np.ndarray,
+    transport_residuals: np.ndarray,
+    target_rasters: np.ndarray,
+    predicted_rasters: np.ndarray,
+    true_classes: np.ndarray,
+    predicted_classes: np.ndarray,
+    run_dir: str | Path,
+) -> None:
+    """Plot NO2 sequences, transport residuals, and joint predictions.
+
+    Args:
+        no2_rasters: Physical NO2 rasters shaped sample by five timesteps by height by width.
+        transport_residuals: Physical residuals shaped sample by four transitions by height by width.
+        target_rasters: Physical target rasters shaped sample by height by width.
+        predicted_rasters: Physical predicted rasters matching ``target_rasters``.
+        true_classes: Integer class labels for each sample.
+        predicted_classes: Integer predicted class labels for each sample.
+        run_dir: Model-run output directory.
+    """
+    sns.set_theme(style="white", font_scale=0.8)
+    no2_low, no2_high = np.nanpercentile(no2_rasters, (2.0, 98.0))
+    residual_limit = np.nanpercentile(np.abs(transport_residuals), 98.0)
+    target_limit = np.nanpercentile(np.abs(np.concatenate((target_rasters, predicted_rasters))), 98.0)
+    column_titles = (
+        "NO2 t1",
+        "NO2 t2",
+        "NO2 t3",
+        "NO2 t4",
+        "NO2 t5",
+        "Residual 1-2",
+        "Residual 2-3",
+        "Residual 3-4",
+        "Residual 4-5",
+        "Target raster",
+        "Predicted raster",
+    )
+    figure, axes = plt.subplots(
+        len(no2_rasters),
+        len(column_titles),
+        figsize=(22, 36),
+        squeeze=False,
+    )
+    for row, (true_class, predicted_class) in enumerate(zip(true_classes, predicted_classes, strict=True)):
+        for timestep in range(no2_rasters.shape[1]):
+            no2_image = axes[row, timestep].imshow(
+                no2_rasters[row, timestep],
+                cmap="viridis",
+                vmin=no2_low,
+                vmax=no2_high,
+            )
+        for transition in range(transport_residuals.shape[1]):
+            residual_image = axes[row, 5 + transition].imshow(
+                transport_residuals[row, transition],
+                cmap="RdBu_r",
+                vmin=-residual_limit,
+                vmax=residual_limit,
+            )
+        target_image = axes[row, 9].imshow(
+            target_rasters[row],
+            cmap="RdBu_r",
+            vmin=-target_limit,
+            vmax=target_limit,
+        )
+        axes[row, 10].imshow(
+            predicted_rasters[row],
+            cmap="RdBu_r",
+            vmin=-target_limit,
+            vmax=target_limit,
+        )
+        axes[row, 0].set_ylabel(
+            f"True: {MODEL_CLASS_NAMES[true_class]}\nPred: {MODEL_CLASS_NAMES[predicted_class]}",
+            rotation=0,
+            horizontalalignment="right",
+            verticalalignment="center",
+            labelpad=32,
+            fontsize=7,
+        )
+        for axis in axes[row]:
+            axis.set_xticks(())
+            axis.set_yticks(())
+    for axis, title in zip(axes[0], column_titles, strict=True):
+        axis.set_title(title, fontsize=9)
+
+    figure.suptitle("Test examples: model inputs, labels, and joint predictions", fontsize=16)
+    figure.subplots_adjust(left=0.09, right=0.995, top=0.975, bottom=0.045, wspace=0.04, hspace=0.08)
+    no2_colorbar_axis = figure.add_axes((0.10, 0.018, 0.39, 0.008))
+    residual_colorbar_axis = figure.add_axes((0.535, 0.018, 0.285, 0.008))
+    target_colorbar_axis = figure.add_axes((0.845, 0.018, 0.145, 0.008))
+    figure.colorbar(no2_image, cax=no2_colorbar_axis, orientation="horizontal").set_label("NO2")
+    figure.colorbar(residual_image, cax=residual_colorbar_axis, orientation="horizontal").set_label(
+        "Transport residual"
+    )
+    figure.colorbar(target_image, cax=target_colorbar_axis, orientation="horizontal").set_label("Delta target")
+    _save(figure, run_dir, "joint_prediction_samples")
