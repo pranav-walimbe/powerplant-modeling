@@ -126,6 +126,102 @@ def plot_split_class_f1(
     _save(figure, run_dir, "split_class_f1")
 
 
+def plot_ops_evaluation(
+    model_frames: dict[str, dict[str, pd.DataFrame]],
+    run_dir: str | Path,
+) -> None:
+    """Plot seasonal and vision performance on plant-operation records.
+
+    Args:
+        model_frames: Row-level predictions by model and evaluation scope.
+        run_dir: Model-run output directory.
+    """
+    sns.set_theme(style="whitegrid", font_scale=0.9)
+    models = _available_models(model_frames)
+    metrics = {model_name: classification_metrics(model_frames[model_name]["ops"]) for model_name in models}
+    figure, axes = plt.subplots(2, 3, figsize=(17, 10), squeeze=False)
+    model_positions = np.arange(len(models), dtype=np.float64)
+    summary_names = ("accuracy", "balanced_accuracy", "macro_f1")
+    width = 0.8 / len(summary_names)
+    offsets = (np.arange(len(summary_names)) - (len(summary_names) - 1) / 2) * width
+    for metric_name, offset in zip(summary_names, offsets, strict=True):
+        bars = axes[0, 0].bar(
+            model_positions + offset,
+            [metrics[model_name][metric_name] for model_name in models],
+            width=width,
+            label=metric_name.replace("_", " ").title(),
+        )
+        _label_bars(axes[0, 0], bars)
+    axes[0, 0].set(
+        title="Overall classification metrics",
+        ylabel="Score",
+        xticks=model_positions,
+        xticklabels=[MODEL_DISPLAY_NAMES[name] for name in models],
+        ylim=(0, 1.08),
+    )
+    axes[0, 0].legend(fontsize=8)
+
+    class_positions = np.arange(len(MODEL_CLASS_NAMES), dtype=np.float64)
+    model_width = 0.8 / len(models)
+    model_offsets = (np.arange(len(models)) - (len(models) - 1) / 2) * model_width
+    for model_name, offset in zip(models, model_offsets, strict=True):
+        recall_bars = axes[0, 1].bar(
+            class_positions + offset,
+            [metrics[model_name]["class_recall"][name] for name in MODEL_CLASS_NAMES],
+            width=model_width,
+            color=MODEL_COLORS[model_name],
+            label=MODEL_DISPLAY_NAMES[model_name],
+        )
+        _label_bars(axes[0, 1], recall_bars)
+        frequency_bars = axes[0, 2].bar(
+            class_positions + offset,
+            [metrics[model_name]["predicted_class_frequencies"][name] for name in MODEL_CLASS_NAMES],
+            width=model_width,
+            color=MODEL_COLORS[model_name],
+            label=MODEL_DISPLAY_NAMES[model_name],
+        )
+        _label_bars(axes[0, 2], frequency_bars)
+    class_labels = [name.title() for name in MODEL_CLASS_NAMES]
+    class_counts = metrics[models[0]]["class_counts"]
+    axes[0, 1].set(
+        title="Per-class recall",
+        ylabel="Recall",
+        xticks=class_positions,
+        xticklabels=[f"{name}\n(n={class_counts[key]:,})" for name, key in zip(class_labels, MODEL_CLASS_NAMES)],
+        ylim=(0, 1.08),
+    )
+    axes[0, 1].legend(fontsize=8)
+    axes[0, 2].set(
+        title="Predicted-class frequencies",
+        ylabel="Fraction of records",
+        xticks=class_positions,
+        xticklabels=class_labels,
+        ylim=(0, 1.08),
+    )
+    axes[0, 2].legend(fontsize=8)
+
+    for axis, model_name in zip(axes[1, :2], models, strict=True):
+        sns.heatmap(
+            np.asarray(metrics[model_name]["confusion_matrix"]),
+            annot=True,
+            fmt=",d",
+            cmap="Blues",
+            cbar=False,
+            xticklabels=class_labels,
+            yticklabels=class_labels,
+            ax=axis,
+        )
+        axis.set(
+            title=f"{MODEL_DISPLAY_NAMES[model_name]} confusion matrix",
+            xlabel="Predicted class",
+            ylabel="True class",
+        )
+    axes[1, 2].axis("off")
+    figure.suptitle("Plant-operations evaluation (validation and test AOIs)", fontsize=16)
+    figure.tight_layout()
+    _save(figure, run_dir, "plant_ops_evaluation")
+
+
 def plot_training_curves(
     histories: dict[str, tuple[list[float], list[float]]],
     run_dir: str | Path,
