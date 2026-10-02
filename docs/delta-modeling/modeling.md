@@ -135,9 +135,8 @@ The trainer produces five figures:
 - `joint_prediction_samples.png` shows 20 deterministic test examples with all
   five NO2 inputs, four transport residuals, the true class and target raster,
   and the predicted class and raster;
-- `plant_ops_evaluation.png` compares seasonal and vision accuracy, balanced
-  accuracy, macro F1, per-class recall, predicted-class frequencies, and
-  confusion matrices on the pooled operations cohort.
+- `plant_ops_evaluation.png` compares seasonal and vision per-class F1 on the
+  pooled operations cohort.
 
 The result email attaches all five figures. Test and operations plots describe
 fixed checkpoints and do not participate in model selection.
