@@ -11,6 +11,7 @@ from matplotlib.axes import Axes
 from matplotlib.container import BarContainer
 from modeling.dataset import FINAL_TIMESTEP_TIME_COLUMN, midpoint_local_solar_hour
 from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classification_metrics
+from sklearn.metrics import balanced_accuracy_score, confusion_matrix, f1_score
 
 from config import MODEL_CLASS_NAMES
 
@@ -220,6 +221,136 @@ def plot_ops_evaluation(
     figure.suptitle("Plant-operations evaluation (validation and test AOIs)", fontsize=16)
     figure.tight_layout()
     _save(figure, run_dir, "plant_ops_evaluation")
+
+
+def plot_target_label_agreement(
+    target_paths: dict[str, str | Path],
+    dataframe_dir: str | Path,
+    output_path: str | Path,
+    trim_fraction: float = 0.05,
+) -> None:
+    """Compare signed target-raster change with emissions class labels.
+
+    Args:
+        target_paths: Physical target-raster arrays keyed by split.
+        dataframe_dir: Directory containing split metadata CSVs.
+        output_path: Destination PNG path.
+        trim_fraction: Fraction removed from each raster tail before averaging.
+    """
+    split_order = ("train", "val", "test")
+    class_indices = {name: index for index, name in enumerate(MODEL_CLASS_NAMES)}
+    frames: dict[str, pd.DataFrame] = {}
+    for split in split_order:
+        targets = np.load(target_paths[split], mmap_mode="r")
+        ordered = np.sort(np.asarray(targets).reshape(len(targets), -1), axis=1)
+        trim_count = int(ordered.shape[1] * trim_fraction)
+        scores = ordered[:, trim_count:-trim_count].mean(axis=1)
+        frame = pd.read_csv(Path(dataframe_dir) / f"{split}_df.csv")
+        frames[split] = pd.DataFrame(
+            {
+                "raster_score": scores,
+                "emissions_change": frame["avg_nox_end"] - frame["avg_nox_start"],
+                "label": frame["delta_category"].map(class_indices).to_numpy(dtype=np.int64),
+            }
+        )
+
+    train = frames["train"]
+    thresholds = np.unique(
+        np.quantile(np.abs(train["raster_score"]), np.linspace(0.0, 0.99, 200))
+    )
+    threshold_scores = []
+    for threshold in thresholds:
+        implied = np.where(
+            train["raster_score"] <= -threshold,
+            0,
+            np.where(train["raster_score"] >= threshold, 2, 1),
+        )
+        threshold_scores.append(f1_score(train["label"], implied, average="macro", zero_division=0))
+    selected_index = int(np.argmax(threshold_scores))
+    selected_threshold = float(thresholds[selected_index])
+
+    sns.set_theme(style="whitegrid", font_scale=0.9)
+    figure, axes = plt.subplots(2, 3, figsize=(18, 10), squeeze=False)
+    all_frames = pd.concat(frames.values(), ignore_index=True)
+    axes[0, 0].hexbin(
+        all_frames["emissions_change"],
+        all_frames["raster_score"],
+        gridsize=60,
+        bins="log",
+        mincnt=1,
+        cmap="viridis",
+    )
+    pearson = all_frames[["emissions_change", "raster_score"]].corr().iloc[0, 1]
+    spearman = all_frames[["emissions_change", "raster_score"]].corr(method="spearman").iloc[0, 1]
+    axes[0, 0].axhline(0.0, color="black", linewidth=1)
+    axes[0, 0].axvline(0.0, color="black", linewidth=1)
+    axes[0, 0].set(
+        title=f"Continuous changes (Pearson {pearson:.3f}, Spearman {spearman:.3f})",
+        xlabel="Emissions window change (lb/hr)",
+        ylabel="Target-raster trimmed mean",
+    )
+
+    distributions = [
+        all_frames.loc[all_frames["label"] == index, "raster_score"].to_numpy()
+        for index in range(len(MODEL_CLASS_NAMES))
+    ]
+    axes[0, 1].boxplot(distributions, tick_labels=[name.title() for name in MODEL_CLASS_NAMES], showfliers=False)
+    axes[0, 1].axhline(-selected_threshold, color="#3977af", linestyle="--", linewidth=1.5)
+    axes[0, 1].axhline(selected_threshold, color="#d65f4a", linestyle="--", linewidth=1.5)
+    axes[0, 1].set(
+        title="Raster score by emissions label",
+        xlabel="Emissions label",
+        ylabel="Target-raster trimmed mean",
+    )
+
+    axes[0, 2].plot(thresholds, threshold_scores, color="#4C78A8", linewidth=2)
+    axes[0, 2].scatter(
+        [selected_threshold],
+        [threshold_scores[selected_index]],
+        color="#d65f4a",
+        zorder=3,
+    )
+    axes[0, 2].set(
+        title=f"Training threshold selection (tau={selected_threshold:.4g})",
+        xlabel="Symmetric raster-score threshold",
+        ylabel="Training macro F1",
+    )
+
+    class_labels = [name.title() for name in MODEL_CLASS_NAMES]
+    for axis, split in zip(axes[1], split_order, strict=True):
+        frame = frames[split]
+        implied = np.where(
+            frame["raster_score"] <= -selected_threshold,
+            0,
+            np.where(frame["raster_score"] >= selected_threshold, 2, 1),
+        )
+        matrix = confusion_matrix(frame["label"], implied, labels=np.arange(len(MODEL_CLASS_NAMES)))
+        normalized = matrix / matrix.sum(axis=1, keepdims=True)
+        macro_f1 = f1_score(frame["label"], implied, average="macro", zero_division=0)
+        balanced_accuracy = balanced_accuracy_score(frame["label"], implied)
+        sns.heatmap(
+            normalized,
+            annot=True,
+            fmt=".2f",
+            cmap="Blues",
+            vmin=0.0,
+            vmax=1.0,
+            cbar=split == "test",
+            xticklabels=class_labels,
+            yticklabels=class_labels,
+            ax=axis,
+        )
+        axis.set(
+            title=f"{split.title()}: macro F1 {macro_f1:.3f}, balanced acc. {balanced_accuracy:.3f}",
+            xlabel="Raster-implied class",
+            ylabel="Emissions label",
+        )
+    figure.suptitle("Target-raster and emissions-label agreement", fontsize=16)
+    figure.tight_layout()
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(destination, dpi=180, bbox_inches="tight")
+    plt.close(figure)
 
 
 def plot_training_curves(
