@@ -163,7 +163,7 @@ class VisionClassifier(nn.Module):
         residual_scale: torch.Tensor,
         residual_shift: torch.Tensor,
     ) -> torch.Tensor:
-        # Modulate real inputs without synthesizing an initial residual
+        # Return the final recurrent map without synthesizing an initial residual
         hidden = observation[:, 0] * observation_scale[:, 0, :, None, None] + observation_shift[:, 0, :, None, None]
         for transition in range(residual.shape[1]):
             observation_features = (
@@ -179,6 +179,10 @@ class VisionClassifier(nn.Module):
                 dim=1,
             )
             hidden = self.temporal_encoder(self.branch_fusion(aligned), hidden)
+        return hidden
+
+    def _project_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
+        # Pool the final recurrent map for classification
         average = F.adaptive_avg_pool2d(hidden, 1).flatten(1)
         peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
         return self.temporal_projection(torch.cat((average, peak), dim=1))
@@ -216,7 +220,7 @@ class VisionClassifier(nn.Module):
             transport,
         )
         observation_scale, observation_shift, residual_scale, residual_shift = self._context_film(seasonal)
-        vision_embedding = self._aggregate_aligned(
+        hidden = self._aggregate_aligned(
             observation_features,
             residual_features,
             observation_scale,
@@ -224,8 +228,66 @@ class VisionClassifier(nn.Module):
             residual_scale,
             residual_shift,
         )
-        return self.classifier(vision_embedding)
+        return self.classifier(self._project_hidden(hidden))
 
     def num_params(self) -> int:
         """Count trainable model parameters."""
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
+
+
+class JointVisionClassifier(VisionClassifier):
+    """Predict the change class and an auxiliary 12x12 delta raster."""
+
+    def __init__(
+        self,
+        n_features: int,
+        *,
+        model_width: int = DEFAULT_MODEL_WIDTH,
+        head_dim: int = DEFAULT_HEAD_DIM,
+        dropout: float = DEFAULT_DROPOUT,
+        context_dropout: float = DEFAULT_CONTEXT_DROPOUT,
+    ) -> None:
+        super().__init__(
+            n_features,
+            model_width=model_width,
+            head_dim=head_dim,
+            dropout=dropout,
+            context_dropout=context_dropout,
+        )
+        decoder_width = model_width // 2
+        self.raster_decoder = nn.Sequential(
+            ResidualBlock(model_width, model_width),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(model_width, decoder_width, kernel_size=3, padding=1, bias=False),
+            _group_norm(decoder_width),
+            nn.SiLU(inplace=True),
+            ResidualBlock(decoder_width, decoder_width),
+            nn.Conv2d(decoder_width, 1, kernel_size=1),
+        )
+
+    def forward(
+        self,
+        image: torch.Tensor,
+        seasonal: torch.Tensor,
+        transport: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return class logits and the normalized auxiliary raster."""
+        observation_features = self._encode_frames(
+            self.observation_encoder,
+            self._observation_sequence(image),
+        )
+        residual_features = self._encode_frames(
+            self.residual_encoder,
+            transport,
+        )
+        observation_scale, observation_shift, residual_scale, residual_shift = self._context_film(seasonal)
+        hidden = self._aggregate_aligned(
+            observation_features,
+            residual_features,
+            observation_scale,
+            observation_shift,
+            residual_scale,
+            residual_shift,
+        )
+        logits = self.classifier(self._project_hidden(hidden))
+        return logits, self.raster_decoder(hidden).squeeze(1)

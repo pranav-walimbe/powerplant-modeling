@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import random
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from modeling.convgru import (
     DEFAULT_DROPOUT,
     DEFAULT_HEAD_DIM,
     DEFAULT_MODEL_WIDTH,
-    VisionClassifier,
+    JointVisionClassifier,
 )
 from modeling.dataset import (
     MODEL_FEATURE_NAMES,
@@ -25,6 +26,7 @@ from modeling.dataset import (
     compute_stats,
     save_stats,
 )
+from modeling.delta_target import DeltaRasterTargetTransform, DeltaTargetConfig
 from modeling.eval_utils import (
     LOGIT_COLUMNS,
     PREDICTED_CLASS_COL,
@@ -66,6 +68,9 @@ DEFAULT_GRADIENT_CLIP_NORM = 5.0
 DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
+DEFAULT_RASTER_LOSS_WEIGHT = 1.0
+ROBUST_STD_NORMALIZER = 1.349
+MIN_TARGET_SCALE = 1e-12
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,6 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scheduler-patience", type=int, default=DEFAULT_SCHEDULER_PATIENCE)
     parser.add_argument("--scheduler-factor", type=float, default=DEFAULT_SCHEDULER_FACTOR)
     parser.add_argument("--early-stop-patience", type=int, default=DEFAULT_EARLY_STOP_PATIENCE)
+    parser.add_argument("--raster-loss-weight", type=float, default=DEFAULT_RASTER_LOSS_WEIGHT)
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -117,7 +123,7 @@ def _seed_everything(seed: int) -> None:
 
 def _move_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[torch.Tensor, ...]:
     # Move model inputs and class labels onto the training device
-    image, seasonal, transport, target, index = batch
+    image, seasonal, transport, target, index, *_ = batch
     non_blocking = device.type == "cuda"
     return (
         image.to(device, non_blocking=non_blocking),
@@ -125,6 +131,20 @@ def _move_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[
         transport.to(device, non_blocking=non_blocking),
         target.to(device, non_blocking=non_blocking),
         index,
+    )
+
+
+def _move_joint_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[torch.Tensor, ...]:
+    # Move joint classification and raster supervision onto the training device
+    image, seasonal, transport, target, index, delta_target = batch
+    non_blocking = device.type == "cuda"
+    return (
+        image.to(device, non_blocking=non_blocking),
+        seasonal.to(device, non_blocking=non_blocking),
+        transport.to(device, non_blocking=non_blocking),
+        target.to(device, non_blocking=non_blocking),
+        index,
+        delta_target.to(device, non_blocking=non_blocking),
     )
 
 
@@ -182,7 +202,8 @@ def val_epoch(
         for batch in loader:
             image, seasonal, transport, target, _ = _move_batch(batch, device)
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                logits = model(image, seasonal, transport)
+                output = model(image, seasonal, transport)
+                logits = output[0] if isinstance(output, tuple) else output
                 per_record_loss = criterion(logits, target)
             predicted = logits.argmax(dim=1)
             total_loss += per_record_loss.sum().item()
@@ -292,6 +313,231 @@ def fit_model(
     return train_losses, val_losses, best_validation_macro_f1, best_validation_loss
 
 
+def raster_l1(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+) -> torch.Tensor:
+    """Return one unweighted raster L1 value per sample.
+
+    Args:
+        prediction: Predicted normalized rasters shaped batch by height by width.
+        target: Target normalized rasters matching ``prediction``.
+
+    Returns:
+        Per-sample mean absolute errors.
+    """
+    if prediction.shape != target.shape:
+        raise ValueError("Raster prediction and target shapes must match")
+    spatial_dimensions = tuple(range(1, prediction.ndim))
+    return (prediction - target).abs().mean(dim=spatial_dimensions)
+
+
+def train_joint_epoch(
+    model: JointVisionClassifier,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.CrossEntropyLoss,
+    class_weights: torch.Tensor,
+    scaler: torch.cuda.amp.GradScaler,
+    device: torch.device,
+    gradient_clip_norm: float,
+    raster_loss_weight: float,
+) -> tuple[float, float, float, float]:
+    """Train one joint epoch and return total, component, and accuracy metrics."""
+    model.train()
+    total_classification_loss = 0.0
+    total_classification_weight = 0.0
+    total_raster_loss = 0.0
+    correct = 0
+    amp_enabled = device.type == "cuda"
+    for batch in loader:
+        image, seasonal, transport, target, _, delta_target = _move_joint_batch(batch, device)
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(device_type=device.type, enabled=amp_enabled):
+            logits, raster_prediction = model(image, seasonal, transport)
+            per_record_classification = criterion(logits, target)
+            classification_weight = class_weights[target].sum()
+            classification_loss = per_record_classification.sum() / classification_weight
+            per_record_raster = raster_l1(raster_prediction, delta_target)
+            raster_loss = per_record_raster.mean()
+            loss = classification_loss + raster_loss_weight * raster_loss
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
+        scaler.step(optimizer)
+        scaler.update()
+        total_classification_loss += per_record_classification.detach().sum().item()
+        total_classification_weight += classification_weight.item()
+        total_raster_loss += per_record_raster.detach().sum().item()
+        correct += int((logits.argmax(dim=1) == target).sum().item())
+    classification_epoch_loss = total_classification_loss / total_classification_weight
+    raster_epoch_loss = total_raster_loss / len(loader.dataset)
+    total_epoch_loss = classification_epoch_loss + raster_loss_weight * raster_epoch_loss
+    return total_epoch_loss, classification_epoch_loss, raster_epoch_loss, correct / len(loader.dataset)
+
+
+def val_joint_epoch(
+    model: JointVisionClassifier,
+    loader: DataLoader,
+    criterion: nn.CrossEntropyLoss,
+    class_weights: torch.Tensor,
+    device: torch.device,
+    raster_loss_weight: float,
+) -> tuple[float, float, float, float, float]:
+    """Evaluate both joint tasks and return loss, accuracy, and macro F1 metrics."""
+    model.eval()
+    total_classification_loss = 0.0
+    total_classification_weight = 0.0
+    total_raster_loss = 0.0
+    correct = 0
+    targets: list[np.ndarray] = []
+    predictions: list[np.ndarray] = []
+    amp_enabled = device.type == "cuda"
+    with torch.inference_mode():
+        for batch in loader:
+            image, seasonal, transport, target, _, delta_target = _move_joint_batch(batch, device)
+            with torch.autocast(device_type=device.type, enabled=amp_enabled):
+                logits, raster_prediction = model(image, seasonal, transport)
+                per_record_classification = criterion(logits, target)
+                per_record_raster = raster_l1(raster_prediction, delta_target)
+            predicted = logits.argmax(dim=1)
+            total_classification_loss += per_record_classification.sum().item()
+            total_classification_weight += class_weights[target].sum().item()
+            total_raster_loss += per_record_raster.sum().item()
+            correct += int((predicted == target).sum().item())
+            targets.append(target.cpu().numpy())
+            predictions.append(predicted.cpu().numpy())
+    truth = np.concatenate(targets)
+    predicted = np.concatenate(predictions)
+    macro_f1 = float(
+        f1_score(
+            truth,
+            predicted,
+            labels=np.arange(len(MODEL_CLASS_NAMES)),
+            average="macro",
+            zero_division=0,
+        )
+    )
+    classification_epoch_loss = total_classification_loss / total_classification_weight
+    raster_epoch_loss = total_raster_loss / len(loader.dataset)
+    total_epoch_loss = classification_epoch_loss + raster_loss_weight * raster_epoch_loss
+    return (
+        total_epoch_loss,
+        classification_epoch_loss,
+        raster_epoch_loss,
+        correct / len(loader.dataset),
+        macro_f1,
+    )
+
+
+def fit_joint_model(
+    model: JointVisionClassifier,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    *,
+    device: torch.device,
+    epochs: int,
+    learning_rate: float,
+    class_weight_values: tuple[float, ...],
+    args: argparse.Namespace,
+    checkpoint_path: Path,
+    checkpoint_metadata: dict[str, object],
+) -> tuple[list[float], list[float], float, float, float, float]:
+    """Fit the joint model and restore its best validation macro-F1 state."""
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=learning_rate, weight_decay=args.weight_decay)
+    class_weights = torch.tensor(class_weight_values, dtype=torch.float32, device=device)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        patience=args.scheduler_patience,
+        factor=args.scheduler_factor,
+    )
+    scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
+    best_validation_macro_f1 = float("-inf")
+    best_classification_loss = float("inf")
+    best_total_loss = float("inf")
+    best_raster_loss = float("inf")
+    train_losses: list[float] = []
+    val_losses: list[float] = []
+    epochs_without_improvement = 0
+
+    for epoch in range(1, epochs + 1):
+        train_total, train_classification, train_raster, train_accuracy = train_joint_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            class_weights,
+            scaler,
+            device,
+            args.gradient_clip_norm,
+            args.raster_loss_weight,
+        )
+        validation_total, validation_classification, validation_raster, validation_accuracy, validation_macro_f1 = (
+            val_joint_epoch(
+                model,
+                val_loader,
+                criterion,
+                class_weights,
+                device,
+                args.raster_loss_weight,
+            )
+        )
+        scheduler.step(validation_classification)
+        train_losses.append(train_total)
+        val_losses.append(validation_total)
+        learning_rate_now = optimizer.param_groups[0]["lr"]
+        print(
+            f"Joint vision model epoch {epoch:03d} | "
+            f"train loss {train_total:.5f} (CE {train_classification:.5f}, raster {train_raster:.5f}) "
+            f"acc {train_accuracy:.4f} | "
+            f"val loss {validation_total:.5f} "
+            f"(CE {validation_classification:.5f}, raster {validation_raster:.5f}) "
+            f"acc {validation_accuracy:.4f} macro F1 {validation_macro_f1:.4f} | lr {learning_rate_now:.2e}"
+        )
+        selection_improved = validation_macro_f1 > best_validation_macro_f1 or (
+            validation_macro_f1 == best_validation_macro_f1
+            and validation_classification < best_classification_loss
+        )
+        if selection_improved:
+            best_validation_macro_f1 = validation_macro_f1
+            best_classification_loss = validation_classification
+            best_total_loss = validation_total
+            best_raster_loss = validation_raster
+            epochs_without_improvement = 0
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "validation_loss": validation_total,
+                    "validation_classification_loss": validation_classification,
+                    "validation_raster_l1": validation_raster,
+                    "validation_accuracy": validation_accuracy,
+                    "validation_macro_f1": validation_macro_f1,
+                    **checkpoint_metadata,
+                },
+                checkpoint_path,
+            )
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= args.early_stop_patience:
+                print(f"Early stopping joint vision model at epoch {epoch}")
+                break
+
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    return (
+        train_losses,
+        val_losses,
+        best_validation_macro_f1,
+        best_total_loss,
+        best_classification_loss,
+        best_raster_loss,
+    )
+
+
 def _checkpoint_sha256(path: Path) -> str:
     # Identify the exact masked checkpoint used for reconstruction
     digest = hashlib.sha256()
@@ -363,6 +609,60 @@ def _fill_missing_rasters(
     return paths
 
 
+def _materialize_delta_targets(
+    completed_paths: dict[str, Path],
+    datasets: dict[str, NOxDataset],
+    source_image_stats: dict[str, object],
+    *,
+    output_dir: Path,
+    batch_size: int,
+    config: DeltaTargetConfig,
+) -> dict[str, Path]:
+    # Materialize physical auxiliary targets
+    output_dir.mkdir(parents=True, exist_ok=False)
+    source_center = np.asarray(source_image_stats["image_center"], dtype=np.float32)
+    source_scale = np.asarray(source_image_stats["image_scale"], dtype=np.float32)
+    target_transform = DeltaRasterTargetTransform(config)
+    target_paths: dict[str, Path] = {}
+    with torch.inference_mode():
+        for split, dataset in datasets.items():
+            completed = np.load(completed_paths[split], mmap_mode="r")
+            target_path = output_dir / f"{split}_delta_targets.npy"
+            target_destination = np.lib.format.open_memmap(
+                target_path,
+                mode="w+",
+                dtype=np.float32,
+                shape=(len(dataset), config.target_size, config.target_size),
+            )
+            batch_count = math.ceil(len(dataset) / batch_size)
+            for batch_number, start in enumerate(range(0, len(dataset), batch_size), start=1):
+                stop = min(start + batch_size, len(dataset))
+                completed_batch = np.asarray(completed[start:stop])
+                numeric = completed_batch[:, :, : len(MODEL_IMAGE_KEYS)]
+                physical = numeric * source_scale[None, None, :, None, None]
+                physical = physical + source_center[None, None, :, None, None]
+                elapsed_hours = dataset.elapsed_hours[start:stop]
+                target = target_transform(
+                    torch.from_numpy(physical),
+                    torch.from_numpy(elapsed_hours),
+                )
+                target_destination[start:stop] = target.numpy()
+                if batch_number % 100 == 0 or batch_number == batch_count:
+                    print(f"Delta-target construction {split}: {batch_number:,}/{batch_count:,} batches")
+            target_destination.flush()
+            del completed, target_destination
+            target_paths[split] = target_path
+    return target_paths
+
+
+def _fit_delta_target_stats(path: Path) -> dict[str, float]:
+    # Fit robust auxiliary-target normalization on training values only
+    target = np.load(path, mmap_mode="r")
+    lower, center, upper = np.percentile(target, (25.0, 50.0, 75.0))
+    scale = max(float(upper - lower) / ROBUST_STD_NORMALIZER, MIN_TARGET_SCALE)
+    return {"center": float(center), "scale": scale}
+
+
 def _fit_transport_residual_stats(
     loader: DataLoader,
     stats: NormalizationStats,
@@ -419,7 +719,8 @@ def run_inference(
                     non_blocking=device.type == "cuda",
                 )
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                logits = model(image, seasonal, transport)
+                output = model(image, seasonal, transport)
+                logits = output[0] if isinstance(output, tuple) else output
             logits = logits.float()
             logits_batches.append(logits.cpu().numpy())
             probability_batches.append(logits.softmax(dim=1).cpu().numpy())
@@ -477,6 +778,8 @@ def _class_weights(dataset: NOxDataset) -> dict[str, float]:
 def main() -> None:
     """Train and evaluate seasonal and context-aware vision classifiers."""
     args = parse_args()
+    if args.raster_loss_weight < 0.0:
+        raise ValueError("raster_loss_weight must be nonnegative")
     _seed_everything(args.seed)
     device = _device(args.device)
     completed_root = Path(args.completed_raster_dir).resolve()
@@ -486,7 +789,7 @@ def main() -> None:
     if not args.pretrained_masked_model_weights:
         raise ValueError("Set PRETRAINED_MASKED_MODEL_WEIGHTS or pass --pretrained-masked-model-weights")
 
-    run_name = datetime.now(timezone.utc).strftime("delta_category_classification_%Y%m%d_%H%M%S")
+    run_name = datetime.now(timezone.utc).strftime("delta_joint_raster_%Y%m%d_%H%M%S")
     run_dir = Path(RUNS_DIR) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
@@ -510,6 +813,18 @@ def main() -> None:
         args=args,
         device=device,
     )
+    delta_target_config = DeltaTargetConfig()
+    delta_target_paths = _materialize_delta_targets(
+        completed_paths,
+        source_datasets,
+        masked_image_stats,
+        output_dir=completed_dir / "delta-targets",
+        batch_size=args.batch_size,
+        config=delta_target_config,
+    )
+    delta_target_stats = _fit_delta_target_stats(delta_target_paths["train"])
+    with (run_dir / "delta_target_stats.json").open("w") as destination:
+        json.dump({**delta_target_stats, **delta_target_config.to_metadata()}, destination, indent=2)
     del imputation_model, source_datasets
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -547,6 +862,9 @@ def main() -> None:
             source_image_stats=masked_image_stats,
             transport_transform=transport_transform,
             per_timestep_context=True,
+            delta_target_path=delta_target_paths[split],
+            delta_target_center=delta_target_stats["center"],
+            delta_target_scale=delta_target_stats["scale"],
         )
         for split in datasets
     }
@@ -615,7 +933,7 @@ def main() -> None:
         torch.cuda.empty_cache()
 
     _seed_everything(args.seed)
-    vision_model = VisionClassifier(
+    vision_model = JointVisionClassifier(
         len(MODEL_FEATURE_NAMES),
         model_width=args.model_width,
         head_dim=args.head_dim,
@@ -627,8 +945,10 @@ def main() -> None:
         vision_train_losses,
         vision_validation_losses,
         vision_best_macro_f1,
-        vision_checkpoint_loss,
-    ) = fit_model(
+        vision_checkpoint_total_loss,
+        vision_checkpoint_classification_loss,
+        vision_checkpoint_raster_loss,
+    ) = fit_joint_model(
         vision_model,
         vision_train_loader,
         transport_eval_loaders["val"],
@@ -647,8 +967,13 @@ def main() -> None:
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
             "transport_config": transport_config.to_metadata(),
+            "loss": "weighted_hard_cross_entropy_plus_normalized_raster_l1",
+            "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
+            "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
+            "raster_loss_weight": args.raster_loss_weight,
+            "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
+            "delta_target": {**delta_target_stats, **delta_target_config.to_metadata()},
         },
-        phase_name="Vision classifier",
     )
     vision_frames = {}
     shuffled_context_frames: dict[str, pd.DataFrame] = {}
@@ -676,9 +1001,15 @@ def main() -> None:
         "parameters": vision_model.num_params(),
         "model_width": args.model_width,
         "best_validation_macro_f1": vision_best_macro_f1,
-        "checkpoint_validation_loss": vision_checkpoint_loss,
+        "checkpoint_validation_loss": vision_checkpoint_total_loss,
+        "checkpoint_validation_classification_loss": vision_checkpoint_classification_loss,
+        "checkpoint_validation_raster_l1": vision_checkpoint_raster_loss,
         "encoder_initialization": "random",
-        "loss": "training_prevalence_weighted_hard_cross_entropy",
+        "loss": "weighted_hard_cross_entropy_plus_normalized_raster_l1",
+        "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
+        "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
+        "raster_loss_weight": args.raster_loss_weight,
+        "delta_target": {**delta_target_stats, **delta_target_config.to_metadata()},
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
         "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
@@ -690,7 +1021,10 @@ def main() -> None:
     run_config = {
         "device": str(device),
         "models": ["seasonal", "vision"],
-        "loss": "training_prevalence_weighted_hard_cross_entropy",
+        "loss": "weighted_hard_cross_entropy_plus_normalized_raster_l1",
+        "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
+        "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
+        "raster_loss_weight": args.raster_loss_weight,
         "class_weights": class_weights,
         "selection_metric": "validation_macro_f1",
         "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
@@ -718,6 +1052,7 @@ def main() -> None:
         "pretrained_masked_model_role": "missing_pixel_completion_only",
         "encoder_initialization": "random",
         "completed_raster_paths": {split: str(path) for split, path in completed_paths.items()},
+        "delta_target_paths": {split: str(path) for split, path in delta_target_paths.items()},
         "completed_raster_keys": list(MODEL_IMAGE_KEYS + MODEL_MASK_KEYS),
         "image_keys": list(stats.image_keys),
         "quality_keys": ["no2_mask", "transport_residual_quality"],
@@ -734,7 +1069,13 @@ def main() -> None:
         "seasonal_features": list(MODEL_FEATURE_NAMES),
         "seasonal_feature_timestamp": "sequence_midpoint_local_solar_time",
         "vision_context_timestamps": "each_observation_local_solar_time_rounded_to_nearest_hour",
-        "prediction_family": "three_class_categorical_distribution",
+        "prediction_family": "joint_three_class_and_12x12_delta_raster",
+        "delta_target": {
+            **delta_target_stats,
+            **delta_target_config.to_metadata(),
+            "normalization_fit_split": "train",
+            "loss": "unweighted_L1",
+        },
         "transport": {
             "execution": "cpu_dataloader_transform",
             "method": "backward_semi_lagrangian_bilinear",
