@@ -115,3 +115,23 @@ the companion metadata. These diagnostics do not enter the classifiers.
 Workers write disposable shards against persistent TEMPO and HRRR caches. The
 finalizer validates all source outcomes and publishes split CSVs with raster
 paths relative to the dataset root. One failed shard blocks publication.
+
+## Plant-operations evaluation cohort
+
+`generate_ops_dataset.py` builds `ops_df.csv` from finalized validation and
+test records. It finds plant starts where mean operating time crosses from zero
+to positive and stops where it crosses from positive to zero. Consecutive
+CAMPD hours define each transition.
+
+The builder maps transitions into the AOIs represented by validation and test,
+links each transition to five-scan windows that contain its hour, and keeps the
+window whose midpoint lies closest to the event. Start events may pair with
+increase or steady labels; stop events may pair with decrease or steady
+labels. The manifest keeps AOIs with at least the requested number of increase
+and decrease samples within their source split. It retains `source_split` and
+the original `raster_bundle_path` for each selected record.
+
+The maintained job uses a minimum of 10 increase and 10 decrease records per
+AOI. The resulting cohort pools validation and test AOIs for one operations
+diagnostic. Because validation records contribute to the cohort, its metrics
+do not represent a test-only estimate.

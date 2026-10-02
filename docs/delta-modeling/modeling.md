@@ -113,7 +113,19 @@ frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
-The trainer produces four figures:
+The trainer also evaluates both selected checkpoints on `ops_df.csv`. It uses
+the training-fitted feature and raster normalization. Operations rows map back
+to their `source_split` and `raster_bundle_path`, which lets the vision dataset
+read the completed validation and test arrays already present in job-local
+`/tmp`. The job does not run the masked imputer again for this cohort.
+
+Operations predictions appear under the `ops` scope in `results.json` and in
+model-specific prediction CSVs. This evaluation does not affect checkpointing,
+early stopping, or learning-rate scheduling. The current manifest pools
+validation and test AOIs, so use the operations metrics as a targeted
+diagnostic rather than a test-only result.
+
+The trainer produces five figures:
 
 - `split_class_f1.png` compares macro F1 and per-class F1 with class support for
   every split;
@@ -122,7 +134,10 @@ The trainer produces four figures:
   unit count, calendar month, and midpoint local solar hour.
 - `joint_prediction_samples.png` shows 20 deterministic test examples with all
   five NO2 inputs, four transport residuals, the true class and target raster,
-  and the predicted class and raster.
+  and the predicted class and raster;
+- `plant_ops_evaluation.png` compares seasonal and vision accuracy, balanced
+  accuracy, macro F1, per-class recall, predicted-class frequencies, and
+  confusion matrices on the pooled operations cohort.
 
-The test plots describe the fixed model and do not participate in model
-selection.
+The result email attaches all five figures. Test and operations plots describe
+fixed checkpoints and do not participate in model selection.
