@@ -20,8 +20,15 @@ Records are the number of true examples for each class in the split.
 
 ## Ablation table
 
-| Ablation | Run ID | Split | Class | Seasonal F1 | Vision F1 | Seasonal change | Vision change |
-|---|---|---|---|---:|---:|---:|---:|
+Class F1 triplets use decrease / steady / increase order.
+
+| Ablation | Run ID | Train seasonal | Train vision | Validation seasonal | Validation vision | Test seasonal | Test vision | Test vision macro F1 |
+|---|---|---|---|---|---|---|---|---:|
+| No temperature | `delta_ablation_no_temperature_20261001_224152` | 0.5457 / 0.3612 / 0.6750 | 0.6010 / 0.4479 / 0.7136 | 0.4357 / 0.3884 / 0.6346 | 0.4880 / 0.5191 / 0.7157 | 0.3972 / 0.3819 / 0.7022 | 0.4400 / 0.4488 / 0.7107 | 0.5331 |
+| No wind | `delta_ablation_no_wind_20261002_001550` | 0.5457 / 0.3612 / 0.6750 | 0.6105 / 0.5409 / 0.7030 | 0.4357 / 0.3884 / 0.6346 | 0.5342 / 0.6024 / 0.7005 | 0.3972 / 0.3819 / 0.7022 | 0.4329 / 0.5206 / 0.6693 | 0.5410 |
+| No transport | `delta_ablation_no_transport_20261002_002527` | 0.5457 / 0.3612 / 0.6750 | 0.6333 / 0.5574 / 0.6732 | 0.4357 / 0.3884 / 0.6346 | 0.5127 / 0.5853 / 0.6341 | 0.3972 / 0.3819 / 0.7022 | 0.4310 / 0.5009 / 0.6076 | 0.5132 |
+| No class weights | `delta_ablation_no_loss_weights_20261002_003352` | 0.5053 / 0.3712 / 0.6852 | 0.6151 / 0.5883 / 0.7245 | 0.4374 / 0.4108 / 0.6544 | 0.5154 / 0.6123 / 0.6841 | 0.3750 / 0.3932 / 0.7039 | 0.4284 / 0.5511 / 0.6826 | 0.5540 |
+| No NO2 | `delta_ablation_no_no2_20261002_004354` | 0.5457 / 0.3612 / 0.6750 | 0.5950 / 0.5210 / 0.6865 | 0.4357 / 0.3884 / 0.6346 | 0.5351 / 0.5839 / 0.6675 | 0.3972 / 0.3819 / 0.7022 | 0.4314 / 0.5119 / 0.6597 | 0.5343 |
 
 ## Experiment log
 
