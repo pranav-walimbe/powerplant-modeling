@@ -406,8 +406,6 @@ class NOxDataset(Dataset):
         self.transport_transform = transport_transform
         self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
-        if not np.isfinite(delta_target_scale) or delta_target_scale <= MIN_SCALE:
-            raise ValueError("Delta target scale must be finite and positive")
         self.delta_target_path = Path(delta_target_path) if delta_target_path else None
         self.delta_target_center = float(delta_target_center)
         self.delta_target_scale = float(delta_target_scale)

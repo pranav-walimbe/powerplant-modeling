@@ -90,6 +90,8 @@ cross-entropy objective. The joint model adds the mean absolute error over all
 pixels in the normalized target raster without quality weighting. Its total
 loss is `CE + lambda * L1`; `RASTER_LOSS_WEIGHT` configures `lambda` and
 defaults to 1.0. Input NO2 and residual-quality rasters remain unchanged.
+The `TARGET_SMOOTHING_SIGMA` launcher setting controls Gaussian target
+smoothing in 12 x 12 grid cells and defaults to 1.5.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the

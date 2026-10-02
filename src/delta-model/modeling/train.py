@@ -26,7 +26,6 @@ from modeling.dataset import (
     compute_stats,
     save_stats,
 )
-from modeling.delta_target import DeltaRasterTargetTransform, DeltaTargetConfig
 from modeling.eval_utils import (
     LOGIT_COLUMNS,
     PREDICTED_CLASS_COL,
@@ -40,6 +39,7 @@ from modeling.plot_utils import plot_accuracy_by_characteristic, plot_split_clas
 from modeling.transport import TransportConfig, TransportTransform
 from sklearn.metrics import f1_score
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from config import (
@@ -69,6 +69,10 @@ DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
 DEFAULT_RASTER_LOSS_WEIGHT = 1.0
+DEFAULT_TARGET_SMOOTHING_SIGMA = 1.5
+DELTA_TARGET_SIZE = 12
+DELTA_TARGET_UPWIND_FRACTION = 1.0 / 3.0
+DELTA_TARGET_MIN_WIND_SPEED_MPS = 0.5
 ROBUST_STD_NORMALIZER = 1.349
 MIN_TARGET_SCALE = 1e-12
 
@@ -97,6 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scheduler-factor", type=float, default=DEFAULT_SCHEDULER_FACTOR)
     parser.add_argument("--early-stop-patience", type=int, default=DEFAULT_EARLY_STOP_PATIENCE)
     parser.add_argument("--raster-loss-weight", type=float, default=DEFAULT_RASTER_LOSS_WEIGHT)
+    parser.add_argument("--target-smoothing-sigma", type=float, default=DEFAULT_TARGET_SMOOTHING_SIGMA)
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -326,8 +331,6 @@ def raster_l1(
     Returns:
         Per-sample mean absolute errors.
     """
-    if prediction.shape != target.shape:
-        raise ValueError("Raster prediction and target shapes must match")
     spatial_dimensions = tuple(range(1, prediction.ndim))
     return (prediction - target).abs().mean(dim=spatial_dimensions)
 
@@ -609,6 +612,98 @@ def _fill_missing_rasters(
     return paths
 
 
+def _grid_coordinates(height: int, width: int, reference: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # Return east and north pixel offsets from the raster center
+    rows = torch.arange(height, dtype=reference.dtype, device=reference.device) - (height - 1) / 2
+    columns = torch.arange(width, dtype=reference.dtype, device=reference.device) - (width - 1) / 2
+    east, south = torch.meshgrid(columns, rows, indexing="xy")
+    return east, -south
+
+
+def _upwind_background(no2: torch.Tensor, wind_u: torch.Tensor, wind_v: torch.Tensor) -> torch.Tensor:
+    # Estimate one background per sample and timestep
+    batch_size, timesteps, height, width = no2.shape
+    reference_u = torch.nanmedian(wind_u.reshape(batch_size, timesteps, -1), dim=-1).values
+    reference_v = torch.nanmedian(wind_v.reshape(batch_size, timesteps, -1), dim=-1).values
+    finite_wind = torch.isfinite(reference_u) & torch.isfinite(reference_v)
+    safe_u = torch.where(finite_wind, reference_u, torch.zeros_like(reference_u))
+    safe_v = torch.where(finite_wind, reference_v, torch.zeros_like(reference_v))
+    speed = torch.hypot(safe_u, safe_v)
+
+    east, north = _grid_coordinates(height, width, no2)
+    safe_speed = speed.clamp_min(DELTA_TARGET_MIN_WIND_SPEED_MPS)
+    along_wind = (
+        east[None, None] * safe_u[:, :, None, None]
+        + north[None, None] * safe_v[:, :, None, None]
+    ) / safe_speed[:, :, None, None]
+    cutoff = torch.quantile(along_wind.flatten(2), DELTA_TARGET_UPWIND_FRACTION, dim=-1)
+    upwind_values = no2.masked_fill(along_wind > cutoff[:, :, None, None], torch.nan)
+    upwind_background = torch.nanmedian(upwind_values.flatten(2), dim=-1).values
+    full_background = torch.nanmedian(no2.flatten(2), dim=-1).values
+    use_upwind = (
+        finite_wind
+        & (speed >= DELTA_TARGET_MIN_WIND_SPEED_MPS)
+        & torch.isfinite(upwind_background)
+    )
+    return torch.where(use_upwind, upwind_background, full_background)
+
+
+def _window_means(values: torch.Tensor, elapsed_hours: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # Calculate early and late trapezoidal means
+    interval_means = (values[:, :-1] + values[:, 1:]) / 2.0
+    spatial_dimensions = (1,) * (values.ndim - 2)
+    weights = elapsed_hours.reshape(elapsed_hours.shape[0], elapsed_hours.shape[1], *spatial_dimensions)
+    early = (interval_means[:, :2] * weights[:, :2]).sum(dim=1) / weights[:, :2].sum(dim=1)
+    late = (interval_means[:, 2:] * weights[:, 2:]).sum(dim=1) / weights[:, 2:].sum(dim=1)
+    return early, late
+
+
+def _gaussian_smooth(values: torch.Tensor, sigma: float) -> torch.Tensor:
+    # Smooth the pooled target in target-grid cells
+    if sigma == 0.0:
+        return values
+    radius = max(1, math.ceil(3.0 * sigma))
+    coordinates = torch.arange(-radius, radius + 1, dtype=values.dtype, device=values.device)
+    kernel_1d = torch.exp(-0.5 * (coordinates / sigma).square())
+    kernel_1d = kernel_1d / kernel_1d.sum()
+    kernel_2d = torch.outer(kernel_1d, kernel_1d)[None, None]
+    padded = F.pad(values[:, None], (radius, radius, radius, radius), mode="replicate")
+    return F.conv2d(padded, kernel_2d).squeeze(1)
+
+
+def _delta_raster_target(
+    physical_image: torch.Tensor,
+    elapsed_hours: torch.Tensor,
+    smoothing_sigma: float,
+) -> torch.Tensor:
+    # Build a pooled and smoothed physical NO2-change target
+    no2 = physical_image[:, :, MODEL_IMAGE_KEYS.index("no2")]
+    background = _upwind_background(
+        no2,
+        physical_image[:, :, MODEL_IMAGE_KEYS.index("wind_u_80m_mps")],
+        physical_image[:, :, MODEL_IMAGE_KEYS.index("wind_v_80m_mps")],
+    )
+    early, late = _window_means(no2 - background[:, :, None, None], elapsed_hours)
+    target = late - early
+    pool_factor = physical_image.shape[-1] // DELTA_TARGET_SIZE
+    pooled = F.avg_pool2d(target[:, None], pool_factor).squeeze(1)
+    return _gaussian_smooth(pooled, smoothing_sigma)
+
+
+def _delta_target_metadata(smoothing_sigma: float) -> dict[str, float | int | str]:
+    # Describe the auxiliary target construction
+    return {
+        "target_size": DELTA_TARGET_SIZE,
+        "smoothing_sigma_cells": smoothing_sigma,
+        "upwind_fraction": DELTA_TARGET_UPWIND_FRACTION,
+        "min_wind_speed_mps": DELTA_TARGET_MIN_WIND_SPEED_MPS,
+        "background_method": "per_timestep_wind_relative_upwind_third_median",
+        "calm_wind_fallback": "full_raster_median",
+        "temporal_method": "late_minus_early_trapezoidal_mean",
+        "no2_source": "masked_model_completed_physical_units",
+    }
+
+
 def _materialize_delta_targets(
     completed_paths: dict[str, Path],
     datasets: dict[str, NOxDataset],
@@ -616,13 +711,12 @@ def _materialize_delta_targets(
     *,
     output_dir: Path,
     batch_size: int,
-    config: DeltaTargetConfig,
+    smoothing_sigma: float,
 ) -> dict[str, Path]:
     # Materialize physical auxiliary targets
     output_dir.mkdir(parents=True, exist_ok=False)
     source_center = np.asarray(source_image_stats["image_center"], dtype=np.float32)
     source_scale = np.asarray(source_image_stats["image_scale"], dtype=np.float32)
-    target_transform = DeltaRasterTargetTransform(config)
     target_paths: dict[str, Path] = {}
     with torch.inference_mode():
         for split, dataset in datasets.items():
@@ -632,7 +726,7 @@ def _materialize_delta_targets(
                 target_path,
                 mode="w+",
                 dtype=np.float32,
-                shape=(len(dataset), config.target_size, config.target_size),
+                shape=(len(dataset), DELTA_TARGET_SIZE, DELTA_TARGET_SIZE),
             )
             batch_count = math.ceil(len(dataset) / batch_size)
             for batch_number, start in enumerate(range(0, len(dataset), batch_size), start=1):
@@ -642,9 +736,10 @@ def _materialize_delta_targets(
                 physical = numeric * source_scale[None, None, :, None, None]
                 physical = physical + source_center[None, None, :, None, None]
                 elapsed_hours = dataset.elapsed_hours[start:stop]
-                target = target_transform(
+                target = _delta_raster_target(
                     torch.from_numpy(physical),
                     torch.from_numpy(elapsed_hours),
+                    smoothing_sigma,
                 )
                 target_destination[start:stop] = target.numpy()
                 if batch_number % 100 == 0 or batch_number == batch_count:
@@ -778,8 +873,6 @@ def _class_weights(dataset: NOxDataset) -> dict[str, float]:
 def main() -> None:
     """Train and evaluate seasonal and context-aware vision classifiers."""
     args = parse_args()
-    if args.raster_loss_weight < 0.0:
-        raise ValueError("raster_loss_weight must be nonnegative")
     _seed_everything(args.seed)
     device = _device(args.device)
     completed_root = Path(args.completed_raster_dir).resolve()
@@ -813,18 +906,18 @@ def main() -> None:
         args=args,
         device=device,
     )
-    delta_target_config = DeltaTargetConfig()
+    delta_target_metadata = _delta_target_metadata(args.target_smoothing_sigma)
     delta_target_paths = _materialize_delta_targets(
         completed_paths,
         source_datasets,
         masked_image_stats,
         output_dir=completed_dir / "delta-targets",
         batch_size=args.batch_size,
-        config=delta_target_config,
+        smoothing_sigma=args.target_smoothing_sigma,
     )
     delta_target_stats = _fit_delta_target_stats(delta_target_paths["train"])
     with (run_dir / "delta_target_stats.json").open("w") as destination:
-        json.dump({**delta_target_stats, **delta_target_config.to_metadata()}, destination, indent=2)
+        json.dump({**delta_target_stats, **delta_target_metadata}, destination, indent=2)
     del imputation_model, source_datasets
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -972,7 +1065,7 @@ def main() -> None:
             "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
             "raster_loss_weight": args.raster_loss_weight,
             "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
-            "delta_target": {**delta_target_stats, **delta_target_config.to_metadata()},
+            "delta_target": {**delta_target_stats, **delta_target_metadata},
         },
     )
     vision_frames = {}
@@ -1009,7 +1102,7 @@ def main() -> None:
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
         "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
         "raster_loss_weight": args.raster_loss_weight,
-        "delta_target": {**delta_target_stats, **delta_target_config.to_metadata()},
+        "delta_target": {**delta_target_stats, **delta_target_metadata},
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
         "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
@@ -1072,7 +1165,7 @@ def main() -> None:
         "prediction_family": "joint_three_class_and_12x12_delta_raster",
         "delta_target": {
             **delta_target_stats,
-            **delta_target_config.to_metadata(),
+            **delta_target_metadata,
             "normalization_fit_split": "train",
             "loss": "unweighted_L1",
         },
