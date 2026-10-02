@@ -33,7 +33,7 @@ done
 echo "Emailing seasonal and vision-model results to ${recipient} via ${mail_host}"
 mail_log_offset=$(ssh -o BatchMode=yes -o ConnectTimeout=15 \
     "${mail_host}" stat -c %s "${mail_log}")
-printf 'NO2 classification training completed successfully.\n\nThe attachments compare seasonal and context-aware vision models, including the pooled plant-operations evaluation over validation and test AOIs. The joint-sample image shows 20 test examples with NO2 inputs, transport residuals, true targets, and predictions.\n\nRun: %s\nJob: %s\n' \
+printf 'NO2 classification training completed successfully.\n\nThe attachments compare seasonal and context-aware vision models, including their per-class F1 scores on the pooled plant-operations cohort over validation and test AOIs. The joint-sample image shows 20 test examples with NO2 inputs, transport residuals, true targets, and predictions.\n\nRun: %s\nJob: %s\n' \
     "${run_dir}" \
     "${job_id}" \
     | ssh -o BatchMode=yes -o ConnectTimeout=15 "${mail_host}" \
