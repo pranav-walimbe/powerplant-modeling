@@ -392,7 +392,9 @@ class NOxDataset(Dataset):
         dataset_dir: str | Path = DATASET_DIR,
         dataframe_dir: str | Path = DATASET_DF,
         load_images: bool = True,
+        manifest_path: str | Path | None = None,
         completed_raster_path: str | Path | None = None,
+        completed_raster_paths: dict[str, str | Path] | None = None,
         source_image_stats: dict[str, object] | None = None,
         transport_transform: TransportTransform | None = None,
         per_timestep_context: bool = False,
@@ -401,16 +403,43 @@ class NOxDataset(Dataset):
         delta_target_scale: float = 1.0,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
+        self.dataframe_dir = Path(dataframe_dir)
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
+        self.completed_raster_paths = {
+            source_split: Path(path) for source_split, path in (completed_raster_paths or {}).items()
+        }
         self.transport_transform = transport_transform
         self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
+        self._completed_rasters_by_split: dict[str, np.ndarray] = {}
         self.delta_target_path = Path(delta_target_path) if delta_target_path else None
         self.delta_target_center = float(delta_target_center)
         self.delta_target_scale = float(delta_target_scale)
         self._delta_targets: np.ndarray | None = None
-        self.frame = _read_split_frame(split, Path(dataframe_dir))
+        self.frame = pd.read_csv(manifest_path) if manifest_path else _read_split_frame(split, self.dataframe_dir)
+        self.completed_source_splits: np.ndarray | None = None
+        self.completed_source_indices: np.ndarray | None = None
+        if manifest_path and self.completed_raster_paths:
+            source_indices = {
+                (source_split, raster_path): index
+                for source_split in self.completed_raster_paths
+                for index, raster_path in enumerate(
+                    _read_split_frame(source_split, self.dataframe_dir)[RASTER_PATH_COL].astype(str)
+                )
+            }
+            self.completed_source_splits = self.frame["source_split"].to_numpy(dtype=str)
+            self.completed_source_indices = np.asarray(
+                [
+                    source_indices[(source_split, str(raster_path))]
+                    for source_split, raster_path in zip(
+                        self.completed_source_splits,
+                        self.frame[RASTER_PATH_COL],
+                        strict=True,
+                    )
+                ],
+                dtype=np.int64,
+            )
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.image_center = np.asarray(self.stats.image_center, dtype=np.float32)
         self.image_scale = np.asarray(self.stats.image_scale, dtype=np.float32)
@@ -449,21 +478,35 @@ class NOxDataset(Dataset):
     def __len__(self) -> int:
         return len(self.labels)
 
+    def _normalize_completed(self, completed: np.ndarray) -> torch.Tensor:
+        # Convert masked-model normalization into classifier normalization
+        numeric = completed[:, : len(MODEL_IMAGE_KEYS)]
+        source_center = self.source_image_center[None, :, None, None]
+        source_scale = self.source_image_scale[None, :, None, None]
+        physical = numeric * source_scale + source_center
+        center = self.image_center[None, :, None, None]
+        scale = self.image_scale[None, :, None, None]
+        numeric[:] = (physical - center) / scale
+        np.clip(completed, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=completed)
+        return torch.from_numpy(completed)
+
     def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
         if self.load_images:
-            if self.completed_raster_path is not None:
+            if self.completed_raster_paths:
+                source_split = str(self.completed_source_splits[index])
+                if source_split not in self._completed_rasters_by_split:
+                    self._completed_rasters_by_split[source_split] = np.load(
+                        self.completed_raster_paths[source_split],
+                        mmap_mode="r",
+                    )
+                source_index = int(self.completed_source_indices[index])
+                completed = np.array(self._completed_rasters_by_split[source_split][source_index], copy=True)
+                image = self._normalize_completed(completed)
+            elif self.completed_raster_path is not None:
                 if self._completed_rasters is None:
                     self._completed_rasters = np.load(self.completed_raster_path, mmap_mode="r")
                 completed = np.array(self._completed_rasters[index], copy=True)
-                numeric = completed[:, : len(MODEL_IMAGE_KEYS)]
-                source_center = self.source_image_center[None, :, None, None]
-                source_scale = self.source_image_scale[None, :, None, None]
-                physical = numeric * source_scale + source_center
-                center = self.image_center[None, :, None, None]
-                scale = self.image_scale[None, :, None, None]
-                numeric[:] = (physical - center) / scale
-                np.clip(completed, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=completed)
-                image = torch.from_numpy(completed)
+                image = self._normalize_completed(completed)
             else:
                 raster_path = _raster_path(self.raster_paths[index], self.dataset_dir)
                 rasters, masks = _load_raster_bundle(raster_path)

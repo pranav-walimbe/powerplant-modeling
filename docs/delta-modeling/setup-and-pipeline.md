@@ -115,7 +115,21 @@ classifier training. It does not copy the masked encoder into the classifier. Se
 The masked-pretraining workflow lives in
 [masked-pretraining/setup-and-pipeline.md](../masked-pretraining/setup-and-pipeline.md).
 
-## 5. Train and evaluate
+## 5. Build the plant-operations cohort
+
+After raster generation finishes, build the operations manifest from finalized
+validation and test records:
+
+```bash
+sbatch scripts/slurm/generate_ops_dataset.sh --min-sample-count 10
+```
+
+The job writes `ops_df.csv` under the configured dataframe directory and
+emails a count summary. It retains AOIs with at least 10 increase and 10
+decrease operation-linked records within each source split. Rebuild the
+manifest after replacing validation or test metadata.
+
+## 6. Train and evaluate
 
 Submit the maintained launcher:
 
@@ -123,8 +137,8 @@ Submit the maintained launcher:
 sbatch scripts/slurm/train_model.sh
 ```
 
-The job stages split metadata in job-local `/tmp`, fits global raster
-normalization on the training split, fills missing NO2 into temporary
+The job stages split metadata and `ops_df.csv` in job-local `/tmp`, fits global
+raster normalization on the training split, fills missing NO2 into temporary
 memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;
@@ -132,9 +146,11 @@ memory-mapped arrays, and trains two classifiers:
   advection-residual features at each timestep.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on
-`savio4_gpu` with `a5k_gpu4_normal`. It emails split and class accuracy,
-training curves, and the test characteristic comparison after a successful
-run. See [modeling.md](modeling.md) for the model contract.
+`savio4_gpu` with `a5k_gpu4_normal`. After model selection, both classifiers
+run on the pooled validation-and-test operations cohort. The vision dataset
+reuses completed split rasters from job-local storage. The result email
+includes the operations comparison with the standard training and test
+figures. See [modeling.md](modeling.md) for the model contract.
 
 ## Current Savio launchers
 
@@ -144,6 +160,7 @@ run. See [modeling.md](modeling.md) for the model contract.
 | TEMPO observations | `build_tempo_mapping_observations.sh` | `0-31%14`, 4 CPUs, 8 hours |
 | Stratification | `stratify_plants.sh` | 16 CPUs, 30 minutes, high-memory node |
 | Dataset shards | `launch_dataset_generation.sh` | Up to 8 tasks, 8 CPUs each, 12 hours |
+| Operations cohort | `generate_ops_dataset.sh` | 4 CPUs, 30 minutes |
 | Masked pretraining | `train_masked_pretraining.sh` | 1 A5000, 4 CPUs, 8 hours |
 | Delta classification | `train_model.sh` | 1 A5000, 4 CPUs, 2 hours |
 
