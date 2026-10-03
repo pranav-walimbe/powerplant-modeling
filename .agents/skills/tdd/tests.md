@@ -2,25 +2,23 @@
 
 ## Good Tests
 
-**Integration-style**: Test through real interfaces, not mocks of internal parts.
+**Minimal unit tests**: Verify one important invariant using in-memory inputs and no external effects.
 
 ```typescript
-// GOOD: Tests observable behavior
-test("user can checkout with valid cart", async () => {
-  const cart = createCart();
-  cart.add(product);
-  const result = await checkout(cart, paymentMethod);
-  expect(result.status).toBe("confirmed");
+// GOOD: One isolated invariant
+test("discount never makes a total negative", () => {
+  expect(applyDiscount(5, 10)).toBe(0);
 });
 ```
 
 Characteristics:
 
 - Tests behavior users/callers care about
-- Uses public API only
+- Uses in-memory inputs
+- Has no filesystem, network, subprocess, plotting, or service setup
 - Survives internal refactors
 - Describes WHAT, not HOW
-- One logical assertion per test
+- Covers only the highest-risk behavior
 
 ## Bad Tests
 
@@ -37,25 +35,12 @@ test("checkout calls paymentService.process", async () => {
 
 Red flags:
 
+- Integration or end-to-end setup
+- Filesystem, network, subprocess, plotting, or artifact output
+- Large fixtures and broad scenario matrices
 - Mocking internal collaborators
 - Testing private methods
 - Asserting on call counts/order
 - Test breaks when refactoring without behavior change
 - Test name describes HOW not WHAT
 - Verifying through external means instead of interface
-
-```typescript
-// BAD: Bypasses interface to verify
-test("createUser saves to database", async () => {
-  await createUser({ name: "Alice" });
-  const row = await db.query("SELECT * FROM users WHERE name = ?", ["Alice"]);
-  expect(row).toBeDefined();
-});
-
-// GOOD: Verifies through interface
-test("createUser makes user retrievable", async () => {
-  const user = await createUser({ name: "Alice" });
-  const retrieved = await getUser(user.id);
-  expect(retrieved.name).toBe("Alice");
-});
-```
