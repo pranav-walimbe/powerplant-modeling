@@ -135,6 +135,30 @@ Run the production workflow with:
 sbatch scripts/slurm/train_model.sh
 ```
 
+## Hyperparameter optimization
+
+`modeling.optimize` runs a seeded TPE search with median pruning.
+It reuses train-only normalization and completed train/validation rasters across
+trials. It never loads or evaluates the test split. The search varies learning
+rate, weight decay, dropout, raster-loss weight, contribution splat sigma,
+Sinkhorn blur, and Sinkhorn reach while holding model width at 64.
+Learning rate is sampled log-uniformly from `1e-5` through `1e-4`. The
+categorical choices are weight decay `{1e-4, 1e-3}`, dropout `{0.2, 0.4}`,
+raster-loss weight `{0.5, 1.0}`, splat sigma `{1.0, 1.5}`, Sinkhorn blur
+`{1.0, 1.5}`, and Sinkhorn reach `{3.0, 6.0}`.
+
+Run 24 trials with:
+
+```bash
+python -m modeling.optimize \
+    --device cuda \
+    --completed-raster-dir /tmp/no2-model-hpo/filled-rasters \
+    --trials 24
+```
+
+Pass `--study-dir` to resume an existing SQLite-backed study. The study writes
+one validation-only summary per trial, `trials.csv`, and `study_summary.json`.
+
 ## Evaluation and artifacts
 
 `results.json` reports accuracy, balanced accuracy, macro F1, macro one-vs-rest

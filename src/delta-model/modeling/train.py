@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import random
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -556,8 +557,26 @@ def fit_joint_model(
     args: argparse.Namespace,
     checkpoint_path: Path,
     checkpoint_metadata: dict[str, object],
+    validation_callback: Callable[[int, float], None] | None = None,
 ) -> tuple[list[float], list[float], float, float, float, float]:
-    """Fit the joint model and restore its best validation macro-F1 state."""
+    """Fit the joint model and restore its best validation macro-F1 state.
+
+    Args:
+        model: Joint classifier and contribution-raster model.
+        train_loader: Shuffled training batches.
+        val_loader: Deterministic validation batches.
+        device: Training device.
+        epochs: Maximum training epochs.
+        learning_rate: Initial AdamW learning rate.
+        class_weight_values: Class weights in configured class order.
+        args: Shared training options.
+        checkpoint_path: Destination for the best model state.
+        checkpoint_metadata: Metadata stored with the model state.
+        validation_callback: Optional epoch and validation macro-F1 observer.
+
+    Returns:
+        Loss histories and best-checkpoint validation metrics.
+    """
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=learning_rate, weight_decay=args.weight_decay)
     class_weights = torch.tensor(class_weight_values, dtype=torch.float32, device=device)
@@ -619,6 +638,8 @@ def fit_joint_model(
             f"(CE {validation_classification:.5f}, raster {validation_raster:.5f}) "
             f"acc {validation_accuracy:.4f} macro F1 {validation_macro_f1:.4f} | lr {learning_rate_now:.2e}"
         )
+        if validation_callback is not None:
+            validation_callback(epoch, validation_macro_f1)
         selection_improved = validation_macro_f1 > best_validation_macro_f1 or (
             validation_macro_f1 == best_validation_macro_f1
             and validation_classification < best_classification_loss
