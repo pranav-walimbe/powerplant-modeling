@@ -33,7 +33,9 @@ The pipeline applies these steps in order:
    minutes apart. Store raster scans as `t0_timestamp` through `t4_timestamp`.
 4. At each raster timestamp, linearly interpolate the CAMPD NOx rate between
    the surrounding UTC-hour values. Store these five interpolated rates as
-   `t0_nox` through `t4_nox`.
+   `t0_nox` through `t4_nox`. For the records retained after split sampling,
+   perform the same interpolation per facility and store the active sources as
+   `t0_source_pixel_nox` through `t4_source_pixel_nox`.
 5. Calculate elapsed-time-weighted trapezoidal means over `t0` through `t2`
    and `t2` through `t4`. Store them as `avg_nox_start` and `avg_nox_end`.
 6. Assign classes from `avg_nox_end - avg_nox_start` using a 250 lb/hr
@@ -97,6 +99,14 @@ coal, natural-gas, and total unit counts. It also stores major-city distance
 and activity-conditioned averages for heat input, generation, and coal NOx.
 The AOI score is selection metadata and does not enter the model. The metadata
 does not store nameplate capacity or normalized NOx-change targets.
+
+Each `tN_source_pixel_nox` value is either null when the AOI has no emissions
+at that timestamp or a JSON list of objects with `facility_id`, `row`, `col`,
+and `nox`. Unit emissions are summed at facility level before interpolation.
+The fractional row and column locate the facility on the 24 by 24 AOI grid;
+integer coordinates denote pixel centers, rows increase southward, and columns
+increase eastward. Lists contain only nonzero facilities and are sorted by
+facility ID. Their NOx values sum to the corresponding AOI-level `tN_nox`.
 
 ## Raster checks and publication
 

@@ -12,6 +12,7 @@ from scipy.optimize import Bounds, LinearConstraint, milp
 
 from config import (
     IMG_RANGE,
+    IMG_SIZE,
     MIN_CITY_POPULATION,
     SEQUENCE_TIMESTEPS,
     TARGET_LABEL_MODE,
@@ -176,6 +177,89 @@ def add_timestep_nox(
         )
         result = result.join(interpolated, on="_timestep_nox_row", how="left")
     return result.drop("_timestep_nox_row")
+
+
+def add_timestep_source_pixel_nox(
+    frame: pl.DataFrame,
+    source_hourly: pl.DataFrame,
+    timesteps: int = SEQUENCE_TIMESTEPS,
+) -> pl.DataFrame:
+    """Interpolate per-facility emissions at every TEMPO timestamp.
+
+    Args:
+        frame: Records carrying one scan timestamp per timestep.
+        source_hourly: Requested AOI-facility-hour emissions and fractional
+            raster coordinates.
+        timesteps: Number of scan timestamps to align.
+
+    Returns:
+        Records with sorted lists of active facility emissions per timestep.
+    """
+    indexed = frame.with_row_index("_source_nox_row")
+    result = indexed
+    source_lookup = source_hourly.select(
+        AOI_ID_COL,
+        "facilityId",
+        "emissions_hour_utc",
+        "row",
+        "col",
+        "nox",
+    )
+    for index in range(timesteps):
+        time_column = f"timestep_time_t{index}"
+        output_column = f"t{index}_source_pixel_nox"
+        interpolated = (
+            indexed.select("_source_nox_row", AOI_ID_COL, time_column)
+            .with_columns(pl.col(time_column).dt.truncate("1h").alias("_lower_hour"))
+            .with_columns(
+                ((pl.col(time_column) - pl.col("_lower_hour")).dt.total_seconds() / SECONDS_PER_HOUR).alias(
+                    "_upper_weight"
+                ),
+                (pl.col("_lower_hour") + pl.duration(hours=1)).alias("_upper_hour"),
+            )
+            .join(
+                source_lookup.rename(
+                    {
+                        "emissions_hour_utc": "_lower_hour",
+                        "nox": "_lower_nox",
+                    }
+                ),
+                on=[AOI_ID_COL, "_lower_hour"],
+                how="left",
+            )
+            .join(
+                source_lookup.select(AOI_ID_COL, "facilityId", "emissions_hour_utc", "nox").rename(
+                    {
+                        "emissions_hour_utc": "_upper_hour",
+                        "nox": "_upper_nox",
+                    }
+                ),
+                on=[AOI_ID_COL, "facilityId", "_upper_hour"],
+                how="left",
+            )
+            .with_columns(
+                pl.when(pl.col("_upper_weight") == 0)
+                .then(pl.col("_lower_nox"))
+                .otherwise(
+                    pl.col("_lower_nox")
+                    + pl.col("_upper_weight") * (pl.col("_upper_nox") - pl.col("_lower_nox"))
+                )
+                .alias("_interpolated_nox")
+            )
+            .filter(pl.col("_interpolated_nox") != 0)
+            .sort("_source_nox_row", "facilityId")
+            .group_by("_source_nox_row", maintain_order=True)
+            .agg(
+                pl.struct(
+                    pl.col("facilityId").alias("facility_id"),
+                    "row",
+                    "col",
+                    pl.col("_interpolated_nox").alias("nox"),
+                ).alias(output_column)
+            )
+        )
+        result = result.join(interpolated, on="_source_nox_row", how="left")
+    return result.drop("_source_nox_row")
 
 
 def add_tempo_sequences(
@@ -653,6 +737,92 @@ def aggregate_aoi_hours(
         hourly.join(aoi_features.lazy(), on=AOI_ID_COL, how="inner")
         .join(aois.select(AOI_ID_COL, "lat", "lon", "x_m", "y_m").lazy(), on=AOI_ID_COL, how="left")
         .sort(AOI_ID_COL, "date", "hour")
+        .collect(engine="streaming")
+    )
+
+
+def _timestep_emissions_hours(frame: pl.DataFrame, timesteps: int) -> pl.DataFrame:
+    # Select only the two hourly CAMPD values needed for each interpolation
+    requests = []
+    for index in range(timesteps):
+        lower_hour = pl.col(f"timestep_time_t{index}").dt.truncate("1h")
+        requests.extend(
+            (
+                frame.select(AOI_ID_COL, lower_hour.alias("emissions_hour_utc")),
+                frame.select(AOI_ID_COL, (lower_hour + pl.duration(hours=1)).alias("emissions_hour_utc")),
+            )
+        )
+    return pl.concat(requests).unique().sort(AOI_ID_COL, "emissions_hour_utc")
+
+
+def _aoi_source_locations(
+    facilities: pl.DataFrame,
+    aois: pl.DataFrame,
+    membership: pl.DataFrame,
+) -> pl.DataFrame:
+    # Express source locations in the raster convention where integers are cell centres
+    cell_size_m = IMG_RANGE * METERS_PER_KM / IMG_SIZE
+    raster_midpoint = (IMG_SIZE - 1) / 2
+    projected_facilities = add_projected_coordinates(facilities.select("facilityId", "lat", "lon"))
+    return (
+        membership.join(projected_facilities.select("facilityId", "x_m", "y_m"), on="facilityId", how="inner")
+        .join(
+            aois.select(
+                AOI_ID_COL,
+                pl.col("x_m").alias("_aoi_x_m"),
+                pl.col("y_m").alias("_aoi_y_m"),
+            ),
+            on=AOI_ID_COL,
+            how="inner",
+        )
+        .select(
+            AOI_ID_COL,
+            "facilityId",
+            ((pl.col("_aoi_y_m") - pl.col("y_m")) / cell_size_m + raster_midpoint).alias("row"),
+            ((pl.col("x_m") - pl.col("_aoi_x_m")) / cell_size_m + raster_midpoint).alias("col"),
+        )
+        .sort(AOI_ID_COL, "facilityId")
+    )
+
+
+def aggregate_aoi_source_hours(
+    records: pl.DataFrame | pl.LazyFrame,
+    frame: pl.DataFrame,
+    facilities: pl.DataFrame,
+    aois: pl.DataFrame,
+    membership: pl.DataFrame,
+    timesteps: int = SEQUENCE_TIMESTEPS,
+) -> pl.DataFrame:
+    """Aggregate only the facility hours needed for source-raster targets.
+
+    Args:
+        records: Usable unit-hour emissions records.
+        frame: Eligible records carrying the TEMPO timestamps to interpolate.
+        facilities: Unique facility locations.
+        aois: Selected AOI centroids and projected coordinates.
+        membership: Facility-to-selected-AOI membership table.
+        timesteps: Number of scan timestamps to align.
+
+    Returns:
+        Requested AOI-facility-hour emissions with fractional raster locations.
+    """
+    records_lazy = records.lazy() if isinstance(records, pl.DataFrame) else records
+    source_requests = _aoi_source_locations(facilities, aois, membership).join(
+        _timestep_emissions_hours(frame, timesteps),
+        on=AOI_ID_COL,
+        how="inner",
+    )
+    facility_hour_requests = source_requests.select("facilityId", "emissions_hour_utc").unique()
+    facility_hourly = (
+        records_lazy.join(facility_hour_requests.lazy(), on=["facilityId", "emissions_hour_utc"], how="inner")
+        .group_by("facilityId", "emissions_hour_utc")
+        .agg(pl.col("noxMass").sum().alias("nox"))
+    )
+    return (
+        source_requests.lazy()
+        .join(facility_hourly, on=["facilityId", "emissions_hour_utc"], how="left")
+        .with_columns(pl.col("nox").fill_null(0.0))
+        .sort(AOI_ID_COL, "emissions_hour_utc", "facilityId")
         .collect(engine="streaming")
     )
 

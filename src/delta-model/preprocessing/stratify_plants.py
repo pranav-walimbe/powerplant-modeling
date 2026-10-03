@@ -18,8 +18,10 @@ from preprocessing.stratify_utils import (
     add_sequence_weather_paths,
     add_tempo_sequences,
     add_timestep_nox,
+    add_timestep_source_pixel_nox,
     add_window_average_targets,
     aggregate_aoi_hours,
+    aggregate_aoi_source_hours,
     build_aoi_membership,
     build_aoi_spatial_frame,
     build_aois,
@@ -63,6 +65,7 @@ TIMESTEP_COLUMNS = [
         f"t{index}_timestamp",
         f"timestep_age_hours_t{index}",
         f"t{index}_nox",
+        f"t{index}_source_pixel_nox",
         f"no2_paths_t{index}",
         f"weather_path_t{index}",
     )
@@ -112,6 +115,14 @@ REQUIRED_COLUMNS = [
     "primaryFuelInfo",
     "attributePrimaryFuelInfo",
     "facility_nameplate_capacity_mw",
+]
+SOURCE_REQUIRED_COLUMNS = [
+    "facilityId",
+    "lat",
+    "lon",
+    "emissions_hour_utc",
+    "noxMass",
+    "noxMassMeasureFlg",
 ]
 
 DEFAULT_DIAGNOSTIC_OUTPUT = Path(VIS_DIR) / "stratification_window_behavior.png"
@@ -641,6 +652,45 @@ def _serialize_no2_paths(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def _serialize_source_pixel_nox(frame: pl.DataFrame) -> pl.DataFrame:
+    # Encode nested source records as compact JSON while preserving null timesteps
+    expressions = []
+    for index in range(SEQUENCE_TIMESTEPS):
+        column = f"t{index}_source_pixel_nox"
+        encoded = pl.concat_str(
+            pl.lit("["),
+            pl.col(column).list.eval(pl.element().struct.json_encode()).list.join(","),
+            pl.lit("]"),
+        )
+        expressions.append(pl.when(pl.col(column).is_null()).then(None).otherwise(encoded).alias(column))
+    return frame.with_columns(expressions)
+
+
+def _add_source_pixel_nox(frame: pl.DataFrame) -> pl.DataFrame:
+    # Rebuild membership for retained records so source aggregation follows sampling
+    source = pl.scan_parquet(FULL_DATA_PARQUET).select(SOURCE_REQUIRED_COLUMNS)
+    records = source.pipe(filter_usable_nox_measurements).filter(pl.col("noxMass").is_finite())
+    facilities = source.select("facilityId", "lat", "lon").drop_nulls().unique(subset="facilityId").collect()
+    aois = frame.select(AOI_ID_COL, "lat", "lon", "x_m", "y_m").unique(subset=AOI_ID_COL)
+    spatial_aois = build_aoi_spatial_frame(aois)
+    membership = build_aoi_membership(aois, facilities, spatial_aois)
+    timestamp_names = {
+        f"t{index}_timestamp": f"timestep_time_t{index}" for index in range(SEQUENCE_TIMESTEPS)
+    }
+    source_frame = frame.rename(timestamp_names)
+    source_hourly = aggregate_aoi_source_hours(
+        records,
+        source_frame,
+        facilities,
+        aois,
+        membership,
+        SEQUENCE_TIMESTEPS,
+    )
+    return add_timestep_source_pixel_nox(source_frame, source_hourly, SEQUENCE_TIMESTEPS).rename(
+        {value: key for key, value in timestamp_names.items()}
+    )
+
+
 def build_stratification_candidates(
     aoi_characteristics_plot: Path = DEFAULT_AOI_CHARACTERISTICS_PLOT,
     aoi_characteristics_output: Path = DEFAULT_AOI_CHARACTERISTICS_OUTPUT,
@@ -770,10 +820,15 @@ def main() -> None:
     print(f"Saved solar-hour class prevalence to {args.solar_hour_prevalence_output}")
     os.makedirs(STRAT_BASE_DIR, exist_ok=True)
     del frame
-    # Project and write one split at a time so the copies never coexist
+    retained = pl.concat(
+        [split.with_columns(pl.lit(name).alias("_split")) for name, split in splits.items()],
+    )
+    del splits
+    retained = _add_source_pixel_nox(retained)
+    # Project and write one split at a time
     for name, destination in (("train", TRAIN_RECORDS_CSV), ("val", VAL_RECORDS_CSV), ("test", TEST_RECORDS_CSV)):
-        split = splits.pop(name)
-        serialized = _serialize_no2_paths(split)
+        split = retained.filter(pl.col("_split") == name).drop("_split")
+        serialized = _serialize_source_pixel_nox(_serialize_no2_paths(split))
         serialized.select(OUTPUT_COLUMNS).write_csv(destination)
 
 
