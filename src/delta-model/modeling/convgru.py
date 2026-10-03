@@ -1,7 +1,9 @@
 """Convolutional recurrent network for emissions-change classification."""
 
+import math
+
 import torch
-from modeling.contribution_targets import CONTRIBUTION_CHANNEL_NAMES
+from modeling.contribution_targets import CONTRIBUTION_CHANNEL_NAMES, CONTRIBUTION_TARGET_SIZE
 from modeling.mlp import SEASONAL_EMBEDDING_DIM, build_seasonal_encoder
 from torch import nn
 from torch.nn import functional as F
@@ -256,6 +258,9 @@ class JointVisionClassifier(VisionClassifier):
             context_dropout=context_dropout,
         )
         decoder_width = model_width // 2
+        raster_output = nn.Conv2d(decoder_width, len(CONTRIBUTION_CHANNEL_NAMES), kernel_size=1)
+        initial_probability = 1.0 / (len(CONTRIBUTION_CHANNEL_NAMES) * CONTRIBUTION_TARGET_SIZE**2)
+        nn.init.constant_(raster_output.bias, math.log(initial_probability / (1.0 - initial_probability)))
         self.raster_decoder = nn.Sequential(
             ResidualBlock(model_width, model_width),
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
@@ -268,7 +273,7 @@ class JointVisionClassifier(VisionClassifier):
             _group_norm(decoder_width),
             nn.SiLU(inplace=True),
             ResidualBlock(decoder_width, decoder_width),
-            nn.Conv2d(decoder_width, len(CONTRIBUTION_CHANNEL_NAMES), kernel_size=1),
+            raster_output,
         )
 
     def forward(

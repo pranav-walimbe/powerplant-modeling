@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 from modeling.autoencoder import MaskedNO2Autoencoder
 from modeling.contribution_targets import (
+    CONTRIBUTION_TARGET_SIZE,
     contribution_target_metadata,
     materialize_contribution_targets,
 )
@@ -44,6 +45,7 @@ from modeling.plot_utils import (
     plot_split_class_f1,
     plot_training_curves,
 )
+from modeling.spatial_loss import UnbalancedSinkhornLoss
 from modeling.transport import TransportConfig, TransportTransform
 from sklearn.metrics import f1_score
 from torch import nn
@@ -77,6 +79,9 @@ DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
 DEFAULT_RASTER_LOSS_WEIGHT = 1.0
 DEFAULT_CONTRIBUTION_SPLAT_SIGMA = 1.5
+DEFAULT_SINKHORN_BLUR_CELLS = 1.5
+DEFAULT_SINKHORN_REACH_CELLS = 6.0
+DEFAULT_SINKHORN_ITERATIONS = 30
 JOINT_PLOT_SAMPLE_COUNT = 20
 
 
@@ -105,6 +110,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--early-stop-patience", type=int, default=DEFAULT_EARLY_STOP_PATIENCE)
     parser.add_argument("--raster-loss-weight", type=float, default=DEFAULT_RASTER_LOSS_WEIGHT)
     parser.add_argument("--contribution-splat-sigma", type=float, default=DEFAULT_CONTRIBUTION_SPLAT_SIGMA)
+    parser.add_argument("--sinkhorn-blur-cells", type=float, default=DEFAULT_SINKHORN_BLUR_CELLS)
+    parser.add_argument("--sinkhorn-reach-cells", type=float, default=DEFAULT_SINKHORN_REACH_CELLS)
+    parser.add_argument("--sinkhorn-iterations", type=int, default=DEFAULT_SINKHORN_ITERATIONS)
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -321,28 +329,12 @@ def fit_model(
     return train_losses, val_losses, best_validation_macro_f1, best_validation_loss
 
 
-def raster_l1(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-) -> torch.Tensor:
-    """Return one unweighted raster L1 value per sample.
-
-    Args:
-        prediction: Predicted contribution rasters shaped batch by channel by height by width.
-        target: Contribution rasters matching ``prediction``.
-
-    Returns:
-        Per-sample mean absolute errors.
-    """
-    spatial_dimensions = tuple(range(1, prediction.ndim))
-    return (prediction - target).abs().mean(dim=spatial_dimensions)
-
-
 def train_joint_epoch(
     model: JointVisionClassifier,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     criterion: nn.CrossEntropyLoss,
+    raster_criterion: UnbalancedSinkhornLoss,
     class_weights: torch.Tensor,
     scaler: torch.cuda.amp.GradScaler,
     device: torch.device,
@@ -364,7 +356,8 @@ def train_joint_epoch(
             per_record_classification = criterion(logits, target)
             classification_weight = class_weights[target].sum()
             classification_loss = per_record_classification.sum() / classification_weight
-            per_record_raster = raster_l1(raster_prediction, contribution_target)
+            with torch.autocast(device_type=device.type, enabled=False):
+                per_record_raster = raster_criterion(raster_prediction, contribution_target)
             raster_loss = per_record_raster.mean()
             loss = classification_loss + raster_loss_weight * raster_loss
         scaler.scale(loss).backward()
@@ -386,6 +379,7 @@ def val_joint_epoch(
     model: JointVisionClassifier,
     loader: DataLoader,
     criterion: nn.CrossEntropyLoss,
+    raster_criterion: UnbalancedSinkhornLoss,
     class_weights: torch.Tensor,
     device: torch.device,
     raster_loss_weight: float,
@@ -405,7 +399,8 @@ def val_joint_epoch(
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
                 logits, raster_prediction = model(image, seasonal, transport)
                 per_record_classification = criterion(logits, target)
-                per_record_raster = raster_l1(raster_prediction, contribution_target)
+                with torch.autocast(device_type=device.type, enabled=False):
+                    per_record_raster = raster_criterion(raster_prediction, contribution_target)
             predicted = logits.argmax(dim=1)
             total_classification_loss += per_record_classification.sum().item()
             total_classification_weight += class_weights[target].sum().item()
@@ -454,6 +449,12 @@ def fit_joint_model(
     optimizer = torch.optim.AdamW(trainable_parameters, lr=learning_rate, weight_decay=args.weight_decay)
     class_weights = torch.tensor(class_weight_values, dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
+    raster_criterion = UnbalancedSinkhornLoss(
+        CONTRIBUTION_TARGET_SIZE,
+        blur_cells=args.sinkhorn_blur_cells,
+        reach_cells=args.sinkhorn_reach_cells,
+        iterations=args.sinkhorn_iterations,
+    ).to(device)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -475,6 +476,7 @@ def fit_joint_model(
             train_loader,
             optimizer,
             criterion,
+            raster_criterion,
             class_weights,
             scaler,
             device,
@@ -486,6 +488,7 @@ def fit_joint_model(
                 model,
                 val_loader,
                 criterion,
+                raster_criterion,
                 class_weights,
                 device,
                 args.raster_loss_weight,
@@ -519,7 +522,7 @@ def fit_joint_model(
                     "model_state_dict": model.state_dict(),
                     "validation_loss": validation_total,
                     "validation_classification_loss": validation_classification,
-                    "validation_raster_l1": validation_raster,
+                    "validation_raster_sinkhorn": validation_raster,
                     "validation_accuracy": validation_accuracy,
                     "validation_macro_f1": validation_macro_f1,
                     **checkpoint_metadata,
@@ -813,6 +816,14 @@ def main() -> None:
         device=device,
     )
     contribution_metadata = contribution_target_metadata(args.contribution_splat_sigma)
+    raster_loss_metadata = {
+        "name": "debiased_unbalanced_sinkhorn_divergence",
+        "blur_cells": args.sinkhorn_blur_cells,
+        "reach_cells": args.sinkhorn_reach_cells,
+        "iterations": args.sinkhorn_iterations,
+        "channel_reduction": "mean",
+        "steady_and_inactive_channels": "zero_mass_targets",
+    }
     contribution_target_paths = materialize_contribution_targets(
         source_datasets,
         completed_dir / "contribution-targets",
@@ -960,9 +971,9 @@ def main() -> None:
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
             "transport_config": transport_config.to_metadata(),
-            "loss": "weighted_hard_cross_entropy_plus_contribution_raster_l1",
+            "loss": "weighted_hard_cross_entropy_plus_unbalanced_sinkhorn",
             "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
-            "raster_loss": "per_sample_mean_absolute_error_on_contribution_targets",
+            "raster_loss": raster_loss_metadata,
             "raster_loss_weight": args.raster_loss_weight,
             "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
             "contribution_target": contribution_metadata,
@@ -1006,11 +1017,11 @@ def main() -> None:
         "best_validation_macro_f1": vision_best_macro_f1,
         "checkpoint_validation_loss": vision_checkpoint_total_loss,
         "checkpoint_validation_classification_loss": vision_checkpoint_classification_loss,
-        "checkpoint_validation_raster_l1": vision_checkpoint_raster_loss,
+        "checkpoint_validation_raster_sinkhorn": vision_checkpoint_raster_loss,
         "encoder_initialization": "random",
-        "loss": "weighted_hard_cross_entropy_plus_contribution_raster_l1",
+        "loss": "weighted_hard_cross_entropy_plus_unbalanced_sinkhorn",
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
-        "raster_loss": "per_sample_mean_absolute_error_on_contribution_targets",
+        "raster_loss": raster_loss_metadata,
         "raster_loss_weight": args.raster_loss_weight,
         "contribution_target": contribution_metadata,
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
@@ -1024,9 +1035,9 @@ def main() -> None:
     run_config = {
         "device": str(device),
         "models": ["seasonal", "vision"],
-        "loss": "weighted_hard_cross_entropy_plus_contribution_raster_l1",
+        "loss": "weighted_hard_cross_entropy_plus_unbalanced_sinkhorn",
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
-        "raster_loss": "per_sample_mean_absolute_error_on_contribution_targets",
+        "raster_loss": raster_loss_metadata,
         "raster_loss_weight": args.raster_loss_weight,
         "class_weights": class_weights,
         "selection_metric": "validation_macro_f1",

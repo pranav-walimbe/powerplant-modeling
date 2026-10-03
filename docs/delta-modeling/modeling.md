@@ -15,7 +15,7 @@ mask, so it can distinguish observations from filled values.
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
 | Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
-| Loss | Weighted class cross-entropy plus two-channel contribution-raster L1 |
+| Loss | Weighted class cross-entropy plus two-channel unbalanced Sinkhorn divergence |
 | Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
@@ -107,12 +107,20 @@ mass even near an AOI edge.
 
 All classifiers use inverse-frequency class weights computed only from the
 training split. Each class therefore contributes equal total weight to the
-cross-entropy objective. The joint model adds mean absolute error over both
-contribution channels. Its total loss is `CE + raster_loss_weight * L1`;
-`RASTER_LOSS_WEIGHT` configures this weight and defaults to 1.0. Input NO2 and
-residual-quality rasters remain unchanged. `CONTRIBUTION_SPLAT_SIGMA` controls
-the Gaussian width in `24 x 24` target-grid cells and defaults to 1.5. Set it
-to zero for nearest-cell targets.
+cross-entropy objective. The joint model compares each predicted contribution
+channel with its target using a debiased unbalanced Sinkhorn divergence. This
+penalizes spatially distant mass more than nearby mass, while mass relaxation
+keeps all-zero steady and inactive channels valid. The two channel losses are
+averaged per sample. Its total loss is
+`CE + raster_loss_weight * sinkhorn_loss`; `RASTER_LOSS_WEIGHT` configures this
+weight and defaults to 1.0.
+
+Sinkhorn scaling uses a separable Gaussian kernel in float32, avoiding a dense
+pairwise pixel-cost matrix. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
+`SINKHORN_ITERATIONS` default to 1.5, 6.0, and 30. The output head starts near
+one unit of total mass across both channels instead of the sigmoid default of
+0.5 per pixel. `CONTRIBUTION_SPLAT_SIGMA` controls target Gaussian width in
+`24 x 24` cells and defaults to 1.5. Set it to zero for nearest-cell targets.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
