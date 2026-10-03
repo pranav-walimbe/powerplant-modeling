@@ -360,8 +360,8 @@ def plot_joint_prediction_samples(
     Args:
         no2_rasters: Physical NO2 rasters shaped sample by five timesteps by height by width.
         transport_residuals: Physical residuals shaped sample by four transitions by height by width.
-        target_rasters: Physical target rasters shaped sample by height by width.
-        predicted_rasters: Physical predicted rasters matching ``target_rasters``.
+        target_rasters: Contribution targets shaped sample by channel by height by width.
+        predicted_rasters: Predicted contribution rasters matching ``target_rasters``.
         true_classes: Integer class labels for each sample.
         predicted_classes: Integer predicted class labels for each sample.
         run_dir: Model-run output directory.
@@ -369,7 +369,7 @@ def plot_joint_prediction_samples(
     sns.set_theme(style="white", font_scale=0.8)
     no2_low, no2_high = np.nanpercentile(no2_rasters, (2.0, 98.0))
     residual_limit = np.nanpercentile(np.abs(transport_residuals), 98.0)
-    target_limit = np.nanpercentile(np.abs(np.concatenate((target_rasters, predicted_rasters))), 98.0)
+    target_limit = np.nanpercentile(np.concatenate((target_rasters, predicted_rasters)), 98.0)
     column_titles = (
         "NO2 t1",
         "NO2 t2",
@@ -380,13 +380,15 @@ def plot_joint_prediction_samples(
         "Residual 2-3",
         "Residual 3-4",
         "Residual 4-5",
-        "Target raster",
-        "Predicted raster",
+        "Target decrease",
+        "Target increase",
+        "Predicted decrease",
+        "Predicted increase",
     )
     figure, axes = plt.subplots(
         len(no2_rasters),
         len(column_titles),
-        figsize=(22, 36),
+        figsize=(26, 36),
         squeeze=False,
     )
     for row, (true_class, predicted_class) in enumerate(zip(true_classes, predicted_classes, strict=True)):
@@ -405,15 +407,27 @@ def plot_joint_prediction_samples(
                 vmax=residual_limit,
             )
         target_image = axes[row, 9].imshow(
-            target_rasters[row],
-            cmap="RdBu_r",
-            vmin=-target_limit,
+            target_rasters[row, 0],
+            cmap="magma",
+            vmin=0,
             vmax=target_limit,
         )
         axes[row, 10].imshow(
-            predicted_rasters[row],
-            cmap="RdBu_r",
-            vmin=-target_limit,
+            target_rasters[row, 1],
+            cmap="magma",
+            vmin=0,
+            vmax=target_limit,
+        )
+        axes[row, 11].imshow(
+            predicted_rasters[row, 0],
+            cmap="magma",
+            vmin=0,
+            vmax=target_limit,
+        )
+        axes[row, 12].imshow(
+            predicted_rasters[row, 1],
+            cmap="magma",
+            vmin=0,
             vmax=target_limit,
         )
         axes[row, 0].set_ylabel(
@@ -439,5 +453,7 @@ def plot_joint_prediction_samples(
     figure.colorbar(residual_image, cax=residual_colorbar_axis, orientation="horizontal").set_label(
         "Transport residual"
     )
-    figure.colorbar(target_image, cax=target_colorbar_axis, orientation="horizontal").set_label("Delta target")
+    figure.colorbar(target_image, cax=target_colorbar_axis, orientation="horizontal").set_label(
+        "Contribution"
+    )
     _save(figure, run_dir, "joint_prediction_samples")

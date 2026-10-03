@@ -107,6 +107,9 @@ The fractional row and column locate the facility on the 24 by 24 AOI grid;
 integer coordinates denote pixel centers, rows increase southward, and columns
 increase eastward. Lists contain only nonzero facilities and are sorted by
 facility ID. Their NOx values sum to the corresponding AOI-level `tN_nox`.
+The modeling pipeline aligns these facilities across time and materializes
+class-conditioned decrease and increase contribution rasters before training.
+Steady records receive two all-zero contribution channels.
 
 ## Raster checks and publication
 

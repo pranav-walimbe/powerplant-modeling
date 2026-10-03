@@ -15,7 +15,7 @@ mask, so it can distinguish observations from filled values.
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
 | Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
-| Loss | Weighted class cross-entropy plus an unweighted auxiliary raster L1 loss |
+| Loss | Weighted class cross-entropy plus two-channel contribution-raster L1 |
 | Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
@@ -65,7 +65,7 @@ the active transport values directly from the transport configuration.
 The training job fits these models:
 
 - `seasonal`: the context-only MLP diagnostic;
-- `vision`: the joint context-aware class and delta-raster predictor.
+- `vision`: the joint context-aware class and contribution-raster predictor.
 
 The observation branch processes five frames. The residual branch processes
 four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
@@ -76,22 +76,44 @@ context and initializes the temporal state without a synthetic residual. Each
 later observation and aligned residual are modulated with that timestep's
 context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 The classifier pools the final recurrent map. A separate decoder upsamples the
-same map into a `12 x 12` delta raster. The model width is 64.
+same map into bounded `12 x 12` decrease and increase contribution rasters.
+The model width is 64.
 
 This is identity-initialized FiLM with unbounded scale and additive shift.
 Training drops the full context sequence for a random share of samples. The
 job also saves predictions and metrics from shuffled-context inference.
 
+## Spatial contribution targets
+
+Before training, the pipeline parses `t0_source_pixel_nox` through
+`t4_source_pixel_nox` and aligns facilities by ID. A facility omitted at a
+timestep has zero emissions. It computes the facility's early and late
+elapsed-time-weighted trapezoidal means with the same intervals used by the
+class label, then subtracts early from late.
+
+For an increase sample, positive facility changes are normalized to sum to one
+and Gaussian-splatted into the increase channel. For a decrease sample, the
+magnitudes of negative facility changes are normalized and splatted into the
+decrease channel. The other channel is zero. Both channels are zero for steady
+samples. Thus these are class-conditioned attribution targets: a zero steady
+target does not assert that every facility was unchanged, because opposing
+facility changes may still cancel within the steady threshold.
+
+Source coordinates are converted from the `24 x 24` input grid to the
+`12 x 12` target grid while preserving pixel-center geometry. Each clipped
+Gaussian is renormalized, so the active channel retains unit mass even near an
+AOI edge.
+
 ## Optimization
 
 All classifiers use inverse-frequency class weights computed only from the
 training split. Each class therefore contributes equal total weight to the
-cross-entropy objective. The joint model adds the mean absolute error over all
-pixels in the normalized target raster without quality weighting. Its total
-loss is `CE + lambda * L1`; `RASTER_LOSS_WEIGHT` configures `lambda` and
-defaults to 1.0. Input NO2 and residual-quality rasters remain unchanged.
-The `TARGET_SMOOTHING_SIGMA` launcher setting controls Gaussian target
-smoothing in 12 x 12 grid cells and defaults to 1.5.
+cross-entropy objective. The joint model adds mean absolute error over both
+contribution channels. Its total loss is `CE + lambda * L1`;
+`RASTER_LOSS_LAMBDA` configures `lambda` and defaults to 1.0. Input NO2 and
+residual-quality rasters remain unchanged. `CONTRIBUTION_SPLAT_SIGMA` controls
+the Gaussian width in `12 x 12` target-grid cells and defaults to 1.5. Set it
+to zero for nearest-cell targets.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
@@ -121,8 +143,8 @@ The trainer produces four figures:
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.
 - `joint_prediction_samples.png` shows 20 deterministic test examples with all
-  five NO2 inputs, four transport residuals, the true class and target raster,
-  and the predicted class and raster.
+  five NO2 inputs, four transport residuals, the true class, and both true and
+  predicted contribution channels.
 
 The result email attaches all four figures. Test plots describe fixed
 checkpoints and do not participate in model selection.

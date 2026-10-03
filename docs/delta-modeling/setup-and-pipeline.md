@@ -132,8 +132,9 @@ memory-mapped arrays, and trains two classifiers:
   advection-residual features at each timestep.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on
-`savio4_gpu` with `a5k_gpu4_normal`. See [modeling.md](modeling.md) for the
-model contract.
+`savio4_gpu` with `a5k_gpu4_normal`. Set `CONTRIBUTION_SPLAT_SIGMA` to tune the
+spatial target width and `RASTER_LOSS_LAMBDA` to tune its weight in the joint
+loss. See [modeling.md](modeling.md) for the model contract.
 
 ## Current Savio launchers
 

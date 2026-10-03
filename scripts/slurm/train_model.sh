@@ -44,8 +44,8 @@ mkdir -p "/global/home/users/pranavwalimbe/.cache"
 training_output=$(mktemp "/global/home/users/pranavwalimbe/.cache/train-no2-${SLURM_JOB_ID}.XXXXXX.log")
 trap 'rm -f -- "${training_output}"' EXIT
 recipient="pranav.walimbe@berkeley.edu"
-raster_loss_weight="${RASTER_LOSS_WEIGHT:-1.0}"
-target_smoothing_sigma="${TARGET_SMOOTHING_SIGMA:-1.5}"
+raster_loss_lambda="${RASTER_LOSS_LAMBDA:-1.0}"
+contribution_splat_sigma="${CONTRIBUTION_SPLAT_SIGMA:-1.5}"
 
 # Slurm 22.05 and later stopped propagating --cpus-per-task into srun
 export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
@@ -68,8 +68,8 @@ srun python -u -m modeling.train \
     --scheduler-patience 10 \
     --scheduler-factor 0.50 \
     --early-stop-patience 15 \
-    --raster-loss-weight "${raster_loss_weight}" \
-    --target-smoothing-sigma "${target_smoothing_sigma}" \
+    --raster-loss-lambda "${raster_loss_lambda}" \
+    --contribution-splat-sigma "${contribution_splat_sigma}" \
     | tee "${training_output}"
 echo "Training command completed; locating result artifacts"
 
