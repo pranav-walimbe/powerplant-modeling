@@ -12,7 +12,7 @@ import pandas as pd
 from config import IMG_SIZE, MODEL_TARGET_COL, SEQUENCE_TIMESTEPS
 
 CONTRIBUTION_CHANNEL_NAMES = ("decrease", "increase")
-CONTRIBUTION_TARGET_SIZE = 12
+CONTRIBUTION_TARGET_SIZE = IMG_SIZE
 SOURCE_PIXEL_NOX_COLUMNS = tuple(f"t{index}_source_pixel_nox" for index in range(SEQUENCE_TIMESTEPS))
 
 

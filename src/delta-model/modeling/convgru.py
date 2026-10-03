@@ -263,6 +263,11 @@ class JointVisionClassifier(VisionClassifier):
             _group_norm(decoder_width),
             nn.SiLU(inplace=True),
             ResidualBlock(decoder_width, decoder_width),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(decoder_width, decoder_width, kernel_size=3, padding=1, bias=False),
+            _group_norm(decoder_width),
+            nn.SiLU(inplace=True),
+            ResidualBlock(decoder_width, decoder_width),
             nn.Conv2d(decoder_width, len(CONTRIBUTION_CHANNEL_NAMES), kernel_size=1),
         )
 

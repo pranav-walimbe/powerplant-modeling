@@ -76,7 +76,7 @@ context and initializes the temporal state without a synthetic residual. Each
 later observation and aligned residual are modulated with that timestep's
 context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 The classifier pools the final recurrent map. A separate decoder upsamples the
-same map into bounded `12 x 12` decrease and increase contribution rasters.
+same map into bounded `24 x 24` decrease and increase contribution rasters.
 The model width is 64.
 
 This is identity-initialized FiLM with unbounded scale and additive shift.
@@ -99,10 +99,9 @@ samples. Thus these are class-conditioned attribution targets: a zero steady
 target does not assert that every facility was unchanged, because opposing
 facility changes may still cancel within the steady threshold.
 
-Source coordinates are converted from the `24 x 24` input grid to the
-`12 x 12` target grid while preserving pixel-center geometry. Each clipped
-Gaussian is renormalized, so the active channel retains unit mass even near an
-AOI edge.
+Source coordinates retain their fractional positions on the `24 x 24` input
+grid. Each clipped Gaussian is renormalized, so the active channel retains unit
+mass even near an AOI edge.
 
 ## Optimization
 
@@ -112,7 +111,7 @@ cross-entropy objective. The joint model adds mean absolute error over both
 contribution channels. Its total loss is `CE + lambda * L1`;
 `RASTER_LOSS_LAMBDA` configures `lambda` and defaults to 1.0. Input NO2 and
 residual-quality rasters remain unchanged. `CONTRIBUTION_SPLAT_SIGMA` controls
-the Gaussian width in `12 x 12` target-grid cells and defaults to 1.5. Set it
+the Gaussian width in `24 x 24` target-grid cells and defaults to 1.5. Set it
 to zero for nearest-cell targets.
 
 Validation macro F1 controls checkpointing and early stopping.
