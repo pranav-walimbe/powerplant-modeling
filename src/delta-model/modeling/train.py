@@ -80,7 +80,11 @@ DEFAULT_CONTRIBUTION_SPLAT_SIGMA = 1.5
 DEFAULT_SINKHORN_BLUR_CELLS = 1.5
 DEFAULT_SINKHORN_REACH_CELLS = 6.0
 DEFAULT_SINKHORN_ITERATIONS = 30
-JOINT_PLOT_SAMPLE_COUNT = 20
+JOINT_PLOT_SAMPLE_COUNTS = {
+    "decrease": 7,
+    "steady": 6,
+    "increase": 7,
+}
 
 
 class UnbalancedSinkhornLoss(nn.Module):
@@ -835,17 +839,50 @@ def _prediction_frame(
     return frame
 
 
+def _spectrum_sample_positions(
+    changes: np.ndarray,
+    labels: np.ndarray,
+    record_indices: np.ndarray,
+) -> np.ndarray:
+    # Select quantile-spaced examples per class and order them by signed change
+    if not (len(changes) == len(labels) == len(record_indices)):
+        raise ValueError("Changes, labels, and record indices must have equal lengths")
+    if not np.isfinite(changes).all():
+        raise ValueError("Joint-plot sample changes must be finite")
+
+    selected_positions = []
+    for class_index, class_name in enumerate(MODEL_CLASS_NAMES):
+        candidates = np.flatnonzero(labels == class_index)
+        requested = JOINT_PLOT_SAMPLE_COUNTS[class_name]
+        if len(candidates) < requested:
+            raise ValueError(
+                f"Joint plot requires {requested} {class_name} records; found {len(candidates)}"
+            )
+        ordered = candidates[
+            np.lexsort((record_indices[candidates], changes[candidates]))
+        ]
+        ranks = np.rint(np.linspace(0, len(ordered) - 1, requested)).astype(np.int64)
+        selected_positions.extend(ordered[ranks])
+
+    selected = np.asarray(selected_positions, dtype=np.int64)
+    return selected[np.lexsort((record_indices[selected], changes[selected]))]
+
+
 def _joint_prediction_sample_arrays(
     dataset: NOxDataset,
     indices: np.ndarray,
     probabilities: np.ndarray,
     raster_predictions: np.ndarray,
     transport_residual_stats: dict[str, float],
-    seed: int,
 ) -> tuple[np.ndarray, ...]:
-    # Collect deterministic test examples in physical units
-    rng = np.random.default_rng(seed)
-    positions = np.sort(rng.choice(len(indices), size=JOINT_PLOT_SAMPLE_COUNT, replace=False))
+    # Collect a deterministic decrease-to-increase spectrum in physical units
+    sample_frame = dataset.frame.iloc[indices]
+    changes = (
+        sample_frame["avg_nox_end"].to_numpy(dtype=np.float64)
+        - sample_frame["avg_nox_start"].to_numpy(dtype=np.float64)
+    )
+    labels = dataset.labels[indices]
+    positions = _spectrum_sample_positions(changes, labels, indices)
     sample_indices = indices[positions]
     records = [dataset[int(index)] for index in sample_indices]
     images = np.stack([record[0].numpy() for record in records])
@@ -861,7 +898,7 @@ def _joint_prediction_sample_arrays(
         + transport_residual_stats["center"]
     )
     predicted_rasters = raster_predictions[positions]
-    true_classes = dataset.labels[sample_indices]
+    true_classes = labels[positions]
     predicted_classes = probabilities[positions].argmax(axis=1)
     return (
         no2_rasters,
@@ -870,6 +907,7 @@ def _joint_prediction_sample_arrays(
         predicted_rasters,
         true_classes,
         predicted_classes,
+        changes[positions],
     )
 
 
@@ -1101,7 +1139,6 @@ def main() -> None:
                 probabilities,
                 raster_predictions,
                 transport_residual_stats,
-                args.seed,
             )
         permutation = np.random.default_rng(args.seed).permutation(len(transport_datasets[split]))
         shuffled_logits, shuffled_probabilities, shuffled_indices, _ = run_inference(

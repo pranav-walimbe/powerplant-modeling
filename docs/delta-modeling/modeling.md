@@ -149,9 +149,10 @@ The trainer produces four figures:
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.
-- `joint_prediction_samples.png` shows 20 deterministic test examples with all
-  five NO2 inputs, four transport residuals, the true class, and both true and
-  predicted contribution channels.
+- `joint_prediction_samples.png` shows 20 deterministic, class-balanced test
+  examples ordered from strongest NOx decrease to strongest increase. It includes
+  all five NO2 inputs, four transport residuals, the true class, and both true
+  and predicted contribution channels.
 
 The result email attaches all four figures. Test plots describe fixed
 checkpoints and do not participate in model selection.

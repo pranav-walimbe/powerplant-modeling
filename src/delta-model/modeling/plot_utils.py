@@ -353,6 +353,7 @@ def plot_joint_prediction_samples(
     predicted_rasters: np.ndarray,
     true_classes: np.ndarray,
     predicted_classes: np.ndarray,
+    nox_changes: np.ndarray,
     run_dir: str | Path,
 ) -> None:
     """Plot NO2 sequences, transport residuals, and joint predictions.
@@ -364,6 +365,7 @@ def plot_joint_prediction_samples(
         predicted_rasters: Predicted contribution rasters matching ``target_rasters``.
         true_classes: Integer class labels for each sample.
         predicted_classes: Integer predicted class labels for each sample.
+        nox_changes: Signed late-minus-early NOx changes in pounds per hour.
         run_dir: Model-run output directory.
     """
     sns.set_theme(style="white", font_scale=0.8)
@@ -391,7 +393,8 @@ def plot_joint_prediction_samples(
         figsize=(26, 36),
         squeeze=False,
     )
-    for row, (true_class, predicted_class) in enumerate(zip(true_classes, predicted_classes, strict=True)):
+    sample_labels = zip(true_classes, predicted_classes, nox_changes, strict=True)
+    for row, (true_class, predicted_class, nox_change) in enumerate(sample_labels):
         for timestep in range(no2_rasters.shape[1]):
             no2_image = axes[row, timestep].imshow(
                 no2_rasters[row, timestep],
@@ -431,6 +434,7 @@ def plot_joint_prediction_samples(
             vmax=target_limit,
         )
         axes[row, 0].set_ylabel(
+            f"NOx change: {nox_change:+.1f} lb/hr\n"
             f"True: {MODEL_CLASS_NAMES[true_class]}\nPred: {MODEL_CLASS_NAMES[predicted_class]}",
             rotation=0,
             horizontalalignment="right",
@@ -444,7 +448,10 @@ def plot_joint_prediction_samples(
     for axis, title in zip(axes[0], column_titles, strict=True):
         axis.set_title(title, fontsize=9)
 
-    figure.suptitle("Test examples: model inputs, labels, and joint predictions", fontsize=16)
+    figure.suptitle(
+        "Test examples from strongest decrease to strongest increase",
+        fontsize=16,
+    )
     figure.subplots_adjust(left=0.09, right=0.995, top=0.975, bottom=0.045, wspace=0.04, hspace=0.08)
     no2_colorbar_axis = figure.add_axes((0.10, 0.018, 0.39, 0.008))
     residual_colorbar_axis = figure.add_axes((0.535, 0.018, 0.285, 0.008))
