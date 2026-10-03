@@ -148,6 +148,7 @@ loss. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
 | Dataset shards | `launch_dataset_generation.sh` | Up to 8 tasks, 8 CPUs each, 12 hours |
 | Masked pretraining | `train_masked_pretraining.sh` | 1 A5000, 4 CPUs, 8 hours |
 | Delta classification | `train_model.sh` | 1 A5000, 4 CPUs, 2 hours |
+| Delta hyperparameter search | `optimize_model.sh` | 1 A5000, 4 CPUs, 8 hours |
 
 Savio policies and availability can change. Check the requested account,
 partition, and QoS before submission.

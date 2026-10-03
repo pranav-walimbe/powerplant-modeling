@@ -147,13 +147,10 @@ categorical choices are weight decay `{1e-4, 1e-3}`, dropout `{0.2, 0.4}`,
 raster-loss weight `{0.5, 1.0}`, splat sigma `{1.0, 1.5}`, Sinkhorn blur
 `{1.0, 1.5}`, and Sinkhorn reach `{3.0, 6.0}`.
 
-Run 24 trials with:
+Run the maintained 24-trial Savio search with:
 
 ```bash
-python -m modeling.optimize \
-    --device cuda \
-    --completed-raster-dir /tmp/no2-model-hpo/filled-rasters \
-    --trials 24
+sbatch scripts/slurm/optimize_model.sh
 ```
 
 Pass `--study-dir` to resume an existing SQLite-backed study. The study writes
