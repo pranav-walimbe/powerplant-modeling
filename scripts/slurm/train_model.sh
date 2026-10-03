@@ -45,7 +45,7 @@ training_output=$(mktemp "/global/home/users/pranavwalimbe/.cache/train-no2-${SL
 trap 'rm -f -- "${training_output}"' EXIT
 recipient="pranav.walimbe@berkeley.edu"
 raster_loss_weight="${RASTER_LOSS_WEIGHT:-1.0}"
-contribution_splat_sigma="${CONTRIBUTION_SPLAT_SIGMA:-1.5}"
+contribution_splat_sigma="${CONTRIBUTION_SPLAT_SIGMA:-1.0}"
 sinkhorn_blur_cells="${SINKHORN_BLUR_CELLS:-1.5}"
 sinkhorn_reach_cells="${SINKHORN_REACH_CELLS:-6.0}"
 sinkhorn_iterations="${SINKHORN_ITERATIONS:-30}"
@@ -65,12 +65,12 @@ srun python -u -m modeling.train \
     --model-width 64 \
     --head-dim 48 \
     --dropout 0.30 \
-    --learning-rate 3e-4 \
-    --weight-decay 1e-4 \
+    --learning-rate 1e-4 \
+    --weight-decay 1e-3 \
     --gradient-clip-norm 5.0 \
     --scheduler-patience 10 \
     --scheduler-factor 0.50 \
-    --early-stop-patience 15 \
+    --early-stop-patience 10 \
     --raster-loss-weight "${raster_loss_weight}" \
     --contribution-splat-sigma "${contribution_splat_sigma}" \
     --sinkhorn-blur-cells "${sinkhorn_blur_cells}" \

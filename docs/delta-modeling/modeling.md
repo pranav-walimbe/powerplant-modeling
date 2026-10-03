@@ -120,19 +120,41 @@ pairwise pixel-cost matrix. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
 `SINKHORN_ITERATIONS` default to 1.5, 6.0, and 30. The output head starts near
 one unit of total mass across both channels instead of the sigmoid default of
 0.5 per pixel. `CONTRIBUTION_SPLAT_SIGMA` controls target Gaussian width in
-`24 x 24` cells and defaults to 1.5. Set it to zero for nearest-cell targets.
+`24 x 24` cells and defaults to 1.0. Set it to zero for nearest-cell targets.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
 learning-rate scheduler. The maintained launcher uses batch size 128, model
-width 64, head width 48, dropout 0.30, and seed 42. These rules are fixed
-without a parameter-selection run.
+width 64, head width 48, dropout 0.30, learning rate `1e-4`, weight decay
+`1e-3`, early-stopping patience 10, and seed 42. These rules are fixed without
+a parameter-selection run.
 
 Run the production workflow with:
 
 ```bash
 sbatch scripts/slurm/train_model.sh
 ```
+
+## Hyperparameter optimization
+
+`modeling.optimize` runs a seeded TPE search with median pruning.
+It reuses train-only normalization and completed train/validation rasters across
+trials. It never loads or evaluates the test split. The search varies learning
+rate, weight decay, dropout, raster-loss weight, contribution splat sigma,
+Sinkhorn blur, and Sinkhorn reach while holding model width at 64.
+Learning rate is sampled log-uniformly from `1e-5` through `1e-4`. The
+categorical choices are weight decay `{1e-4, 1e-3}`, dropout `{0.2, 0.4}`,
+raster-loss weight `{0.5, 1.0}`, splat sigma `{1.0, 1.5}`, Sinkhorn blur
+`{1.0, 1.5}`, and Sinkhorn reach `{3.0, 6.0}`.
+
+Run the maintained 24-trial Savio search with:
+
+```bash
+sbatch scripts/slurm/optimize_model.sh
+```
+
+Pass `--study-dir` to resume an existing SQLite-backed study. The study writes
+one validation-only summary per trial, `trials.csv`, and `study_summary.json`.
 
 ## Evaluation and artifacts
 

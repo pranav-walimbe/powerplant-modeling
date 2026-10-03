@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import random
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,15 +69,15 @@ DEFAULT_SEASONAL_EPOCHS = 75
 DEFAULT_WORKERS = 4
 DEFAULT_PREFETCH_FACTOR = 2
 DEFAULT_SEED = 42
-DEFAULT_LEARNING_RATE = 3e-4
+DEFAULT_LEARNING_RATE = 1e-4
 DEFAULT_SEASONAL_LEARNING_RATE = 1e-3
-DEFAULT_WEIGHT_DECAY = 1e-4
+DEFAULT_WEIGHT_DECAY = 1e-3
 DEFAULT_GRADIENT_CLIP_NORM = 5.0
 DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
-DEFAULT_EARLY_STOP_PATIENCE = 15
+DEFAULT_EARLY_STOP_PATIENCE = 10
 DEFAULT_RASTER_LOSS_WEIGHT = 1.0
-DEFAULT_CONTRIBUTION_SPLAT_SIGMA = 1.5
+DEFAULT_CONTRIBUTION_SPLAT_SIGMA = 1.0
 DEFAULT_SINKHORN_BLUR_CELLS = 1.5
 DEFAULT_SINKHORN_REACH_CELLS = 6.0
 DEFAULT_SINKHORN_ITERATIONS = 30
@@ -556,8 +557,26 @@ def fit_joint_model(
     args: argparse.Namespace,
     checkpoint_path: Path,
     checkpoint_metadata: dict[str, object],
+    validation_callback: Callable[[int, float], None] | None = None,
 ) -> tuple[list[float], list[float], float, float, float, float]:
-    """Fit the joint model and restore its best validation macro-F1 state."""
+    """Fit the joint model and restore its best validation macro-F1 state.
+
+    Args:
+        model: Joint classifier and contribution-raster model.
+        train_loader: Shuffled training batches.
+        val_loader: Deterministic validation batches.
+        device: Training device.
+        epochs: Maximum training epochs.
+        learning_rate: Initial AdamW learning rate.
+        class_weight_values: Class weights in configured class order.
+        args: Shared training options.
+        checkpoint_path: Destination for the best model state.
+        checkpoint_metadata: Metadata stored with the model state.
+        validation_callback: Optional epoch and validation macro-F1 observer.
+
+    Returns:
+        Loss histories and best-checkpoint validation metrics.
+    """
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=learning_rate, weight_decay=args.weight_decay)
     class_weights = torch.tensor(class_weight_values, dtype=torch.float32, device=device)
@@ -619,6 +638,8 @@ def fit_joint_model(
             f"(CE {validation_classification:.5f}, raster {validation_raster:.5f}) "
             f"acc {validation_accuracy:.4f} macro F1 {validation_macro_f1:.4f} | lr {learning_rate_now:.2e}"
         )
+        if validation_callback is not None:
+            validation_callback(epoch, validation_macro_f1)
         selection_improved = validation_macro_f1 > best_validation_macro_f1 or (
             validation_macro_f1 == best_validation_macro_f1
             and validation_classification < best_classification_loss
