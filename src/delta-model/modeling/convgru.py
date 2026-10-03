@@ -3,7 +3,7 @@
 import math
 
 import torch
-from modeling.contribution_targets import CONTRIBUTION_CHANNEL_NAMES, CONTRIBUTION_TARGET_SIZE
+from modeling.dataset import CONTRIBUTION_CHANNEL_NAMES, CONTRIBUTION_TARGET_SIZE
 from modeling.mlp import SEASONAL_EMBEDDING_DIM, build_seasonal_encoder
 from torch import nn
 from torch.nn import functional as F
