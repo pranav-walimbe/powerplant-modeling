@@ -33,7 +33,9 @@ The pipeline applies these steps in order:
    minutes apart. Store raster scans as `t0_timestamp` through `t4_timestamp`.
 4. At each raster timestamp, linearly interpolate the CAMPD NOx rate between
    the surrounding UTC-hour values. Store these five interpolated rates as
-   `t0_nox` through `t4_nox`.
+   `t0_nox` through `t4_nox`. For the records retained after split sampling,
+   perform the same interpolation per facility and store the active sources as
+   `t0_source_pixel_nox` through `t4_source_pixel_nox`.
 5. Calculate elapsed-time-weighted trapezoidal means over `t0` through `t2`
    and `t2` through `t4`. Store them as `avg_nox_start` and `avg_nox_end`.
 6. Assign classes from `avg_nox_end - avg_nox_start` using a 250 lb/hr
@@ -98,6 +100,17 @@ and activity-conditioned averages for heat input, generation, and coal NOx.
 The AOI score is selection metadata and does not enter the model. The metadata
 does not store nameplate capacity or normalized NOx-change targets.
 
+Each `tN_source_pixel_nox` value is either null when the AOI has no emissions
+at that timestamp or a JSON list of objects with `facility_id`, `row`, `col`,
+and `nox`. Unit emissions are summed at facility level before interpolation.
+The fractional row and column locate the facility on the 24 by 24 AOI grid;
+integer coordinates denote pixel centers, rows increase southward, and columns
+increase eastward. Lists contain only nonzero facilities and are sorted by
+facility ID. Their NOx values sum to the corresponding AOI-level `tN_nox`.
+The modeling pipeline aligns these facilities across time and materializes
+class-conditioned decrease and increase contribution rasters before training.
+Steady records receive two all-zero contribution channels.
+
 ## Raster checks and publication
 
 The regridder accepts a TEMPO value when its quality flag is zero, cloud
@@ -115,23 +128,3 @@ the companion metadata. These diagnostics do not enter the classifiers.
 Workers write disposable shards against persistent TEMPO and HRRR caches. The
 finalizer validates all source outcomes and publishes split CSVs with raster
 paths relative to the dataset root. One failed shard blocks publication.
-
-## Plant-operations evaluation cohort
-
-`generate_ops_dataset.py` builds `ops_df.csv` from finalized validation and
-test records. It finds plant starts where mean operating time crosses from zero
-to positive and stops where it crosses from positive to zero. Consecutive
-CAMPD hours define each transition.
-
-The builder maps transitions into the AOIs represented by validation and test,
-links each transition to five-scan windows that contain its hour, and keeps the
-window whose midpoint lies closest to the event. Start events may pair with
-increase or steady labels; stop events may pair with decrease or steady
-labels. The manifest keeps AOIs with at least the requested number of increase
-and decrease samples within their source split. It retains `source_split` and
-the original `raster_bundle_path` for each selected record.
-
-The maintained job uses a minimum of 10 increase and 10 decrease records per
-AOI. The resulting cohort pools validation and test AOIs for one operations
-diagnostic. Because validation records contribute to the cohort, its metrics
-do not represent a test-only estimate.

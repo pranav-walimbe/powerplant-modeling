@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 import pandas as pd
@@ -17,6 +20,7 @@ from torch.utils.data import Dataset
 from config import (
     DATASET_DF,
     DATASET_DIR,
+    IMG_SIZE,
     MODEL_CLASS_NAMES,
     MODEL_IMAGE_CLIP_ABS,
     MODEL_IMAGE_KEYS,
@@ -39,8 +43,200 @@ DEGREES_PER_SOLAR_HOUR = 15.0
 SECONDS_PER_DAY = 86_400.0
 TIMESTEP_TIME_COLUMNS = tuple(f"t{index}_timestamp" for index in range(SEQUENCE_TIMESTEPS))
 FINAL_TIMESTEP_TIME_COLUMN = TIMESTEP_TIME_COLUMNS[-1]
+CONTRIBUTION_CHANNEL_NAMES = ("decrease", "increase")
+CONTRIBUTION_TARGET_SIZE = IMG_SIZE
+SOURCE_PIXEL_NOX_COLUMNS = tuple(f"t{index}_source_pixel_nox" for index in range(SEQUENCE_TIMESTEPS))
 
 MODEL_FEATURE_NAMES = MODEL_SEASONAL_FEATURES
+
+
+class ContributionTargetDataset(Protocol):
+    """Dataset fields required to materialize contribution targets."""
+
+    frame: pd.DataFrame
+    elapsed_hours: np.ndarray
+
+    def __len__(self) -> int:
+        """Return the number of records."""
+        ...
+
+
+def _source_records(payload: object) -> list[dict[str, float | int]]:
+    # Decode one nullable CSV JSON value
+    if payload is None or (isinstance(payload, float) and math.isnan(payload)):
+        return []
+    if isinstance(payload, str):
+        return json.loads(payload)
+    return list(payload)
+
+
+def _facility_changes(
+    timestep_payloads: Sequence[object],
+    elapsed_hours: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # Align facilities across timesteps and calculate late-minus-early changes
+    facility_positions: dict[int, tuple[float, float]] = {}
+    facility_nox: dict[int, np.ndarray] = {}
+    for timestep, payload in enumerate(timestep_payloads):
+        for source in _source_records(payload):
+            facility_id = int(source["facility_id"])
+            facility_positions.setdefault(facility_id, (float(source["row"]), float(source["col"])))
+            facility_nox.setdefault(facility_id, np.zeros(SEQUENCE_TIMESTEPS, dtype=np.float64))[timestep] = float(
+                source["nox"]
+            )
+
+    rows = np.empty(len(facility_nox), dtype=np.float64)
+    columns = np.empty(len(facility_nox), dtype=np.float64)
+    changes = np.empty(len(facility_nox), dtype=np.float64)
+    for output_index, (facility_id, values) in enumerate(facility_nox.items()):
+        interval_means = (values[:-1] + values[1:]) / 2.0
+        early = np.average(interval_means[:2], weights=elapsed_hours[:2])
+        late = np.average(interval_means[2:], weights=elapsed_hours[2:])
+        rows[output_index], columns[output_index] = facility_positions[facility_id]
+        changes[output_index] = late - early
+    return rows, columns, changes
+
+
+def _target_coordinate(source_coordinate: np.ndarray, target_size: int) -> np.ndarray:
+    # Preserve pixel-center geometry while changing grid resolution
+    return (source_coordinate + 0.5) * target_size / IMG_SIZE - 0.5
+
+
+def _gaussian_splat(
+    rows: np.ndarray,
+    columns: np.ndarray,
+    weights: np.ndarray,
+    target_size: int,
+    sigma: float,
+) -> np.ndarray:
+    # Preserve each source weight after clipping the Gaussian to the target grid
+    target = np.zeros((target_size, target_size), dtype=np.float32)
+    target_rows = _target_coordinate(rows, target_size)
+    target_columns = _target_coordinate(columns, target_size)
+    if sigma == 0.0:
+        nearest_rows = np.clip(np.floor(target_rows + 0.5).astype(np.int64), 0, target_size - 1)
+        nearest_columns = np.clip(np.floor(target_columns + 0.5).astype(np.int64), 0, target_size - 1)
+        np.add.at(target, (nearest_rows, nearest_columns), weights.astype(np.float32))
+        return target
+
+    grid_rows, grid_columns = np.mgrid[:target_size, :target_size]
+    for row, column, weight in zip(target_rows, target_columns, weights, strict=True):
+        kernel = np.exp(-0.5 * ((grid_rows - row) ** 2 + (grid_columns - column) ** 2) / sigma**2)
+        target += (weight * kernel / kernel.sum()).astype(np.float32)
+    return target
+
+
+def build_contribution_target(
+    timestep_payloads: Sequence[object],
+    elapsed_hours: np.ndarray,
+    label: str,
+    *,
+    sigma: float,
+    target_size: int = CONTRIBUTION_TARGET_SIZE,
+) -> np.ndarray:
+    """Build class-conditioned decrease and increase contribution rasters.
+
+    Args:
+        timestep_payloads: Five nullable source-pixel JSON values.
+        elapsed_hours: Four durations between consecutive observation times.
+        label: Stored decrease, steady, or increase class.
+        sigma: Gaussian width in target-grid cells. Zero selects nearest-cell splatting.
+        target_size: Output height and width.
+
+    Returns:
+        Two nonnegative rasters ordered as decrease then increase. The active
+        non-steady channel sums to one and steady targets are all zero.
+    """
+    target = np.zeros((len(CONTRIBUTION_CHANNEL_NAMES), target_size, target_size), dtype=np.float32)
+    if label == "steady":
+        return target
+
+    rows, columns, changes = _facility_changes(timestep_payloads, elapsed_hours)
+    if label == "decrease":
+        selected = changes < 0
+        channel = CONTRIBUTION_CHANNEL_NAMES.index("decrease")
+        weights = -changes[selected]
+    else:
+        selected = changes > 0
+        channel = CONTRIBUTION_CHANNEL_NAMES.index("increase")
+        weights = changes[selected]
+    if weights.size == 0:
+        return target
+
+    weights = weights / weights.sum()
+    target[channel] = _gaussian_splat(rows[selected], columns[selected], weights, target_size, sigma)
+    return target
+
+
+def materialize_contribution_targets(
+    datasets: Mapping[str, ContributionTargetDataset],
+    output_dir: str | Path,
+    *,
+    sigma: float,
+    target_size: int = CONTRIBUTION_TARGET_SIZE,
+) -> dict[str, Path]:
+    """Materialize contribution targets for each geographic split.
+
+    Args:
+        datasets: Split datasets carrying metadata and timestep durations.
+        output_dir: New directory for memory-mapped target arrays.
+        sigma: Gaussian width in target-grid cells.
+        target_size: Output height and width.
+
+    Returns:
+        Target array path for each split.
+    """
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=False)
+    target_paths: dict[str, Path] = {}
+    for split, dataset in datasets.items():
+        target_path = destination / f"{split}_contribution_targets.npy"
+        target_array = np.lib.format.open_memmap(
+            target_path,
+            mode="w+",
+            dtype=np.float32,
+            shape=(len(dataset), len(CONTRIBUTION_CHANNEL_NAMES), target_size, target_size),
+        )
+        payloads = dataset.frame.loc[:, SOURCE_PIXEL_NOX_COLUMNS].to_numpy(dtype=object)
+        labels = dataset.frame[MODEL_TARGET_COL].to_numpy(dtype=str)
+        for index, (row_payloads, elapsed_hours, label) in enumerate(
+            zip(payloads, dataset.elapsed_hours, labels, strict=True)
+        ):
+            target_array[index] = build_contribution_target(
+                row_payloads,
+                elapsed_hours,
+                label,
+                sigma=sigma,
+                target_size=target_size,
+            )
+        target_array.flush()
+        del target_array
+        target_paths[split] = target_path
+        print(f"Contribution-target construction {split}: {len(dataset):,} records")
+    return target_paths
+
+
+def contribution_target_metadata(sigma: float, target_size: int = CONTRIBUTION_TARGET_SIZE) -> dict[str, object]:
+    """Describe the persisted contribution-target contract.
+
+    Args:
+        sigma: Gaussian width in target-grid cells.
+        target_size: Output height and width.
+
+    Returns:
+        Serializable target-construction metadata.
+    """
+    return {
+        "target_size": target_size,
+        "channels": list(CONTRIBUTION_CHANNEL_NAMES),
+        "splat_sigma_cells": sigma,
+        "coordinate_source_size": IMG_SIZE,
+        "temporal_method": "late_minus_early_trapezoidal_facility_mean",
+        "normalization": "active_class_facility_changes_sum_to_one",
+        "inactive_class": "all_zero",
+        "steady_target": "both_channels_all_zero",
+        "source_columns": list(SOURCE_PIXEL_NOX_COLUMNS),
+    }
 
 
 @dataclass(frozen=True)
@@ -392,54 +588,22 @@ class NOxDataset(Dataset):
         dataset_dir: str | Path = DATASET_DIR,
         dataframe_dir: str | Path = DATASET_DF,
         load_images: bool = True,
-        manifest_path: str | Path | None = None,
         completed_raster_path: str | Path | None = None,
-        completed_raster_paths: dict[str, str | Path] | None = None,
         source_image_stats: dict[str, object] | None = None,
         transport_transform: TransportTransform | None = None,
         per_timestep_context: bool = False,
-        delta_target_path: str | Path | None = None,
-        delta_target_center: float = 0.0,
-        delta_target_scale: float = 1.0,
+        contribution_target_path: str | Path | None = None,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.dataframe_dir = Path(dataframe_dir)
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
-        self.completed_raster_paths = {
-            source_split: Path(path) for source_split, path in (completed_raster_paths or {}).items()
-        }
         self.transport_transform = transport_transform
         self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
-        self._completed_rasters_by_split: dict[str, np.ndarray] = {}
-        self.delta_target_path = Path(delta_target_path) if delta_target_path else None
-        self.delta_target_center = float(delta_target_center)
-        self.delta_target_scale = float(delta_target_scale)
-        self._delta_targets: np.ndarray | None = None
-        self.frame = pd.read_csv(manifest_path) if manifest_path else _read_split_frame(split, self.dataframe_dir)
-        self.completed_source_splits: np.ndarray | None = None
-        self.completed_source_indices: np.ndarray | None = None
-        if manifest_path and self.completed_raster_paths:
-            source_indices = {
-                (source_split, raster_path): index
-                for source_split in self.completed_raster_paths
-                for index, raster_path in enumerate(
-                    _read_split_frame(source_split, self.dataframe_dir)[RASTER_PATH_COL].astype(str)
-                )
-            }
-            self.completed_source_splits = self.frame["source_split"].to_numpy(dtype=str)
-            self.completed_source_indices = np.asarray(
-                [
-                    source_indices[(source_split, str(raster_path))]
-                    for source_split, raster_path in zip(
-                        self.completed_source_splits,
-                        self.frame[RASTER_PATH_COL],
-                        strict=True,
-                    )
-                ],
-                dtype=np.int64,
-            )
+        self.contribution_target_path = Path(contribution_target_path) if contribution_target_path else None
+        self._contribution_targets: np.ndarray | None = None
+        self.frame = _read_split_frame(split, self.dataframe_dir)
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.image_center = np.asarray(self.stats.image_center, dtype=np.float32)
         self.image_scale = np.asarray(self.stats.image_scale, dtype=np.float32)
@@ -492,17 +656,7 @@ class NOxDataset(Dataset):
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
         if self.load_images:
-            if self.completed_raster_paths:
-                source_split = str(self.completed_source_splits[index])
-                if source_split not in self._completed_rasters_by_split:
-                    self._completed_rasters_by_split[source_split] = np.load(
-                        self.completed_raster_paths[source_split],
-                        mmap_mode="r",
-                    )
-                source_index = int(self.completed_source_indices[index])
-                completed = np.array(self._completed_rasters_by_split[source_split][source_index], copy=True)
-                image = self._normalize_completed(completed)
-            elif self.completed_raster_path is not None:
+            if self.completed_raster_path is not None:
                 if self._completed_rasters is None:
                     self._completed_rasters = np.load(self.completed_raster_path, mmap_mode="r")
                 completed = np.array(self._completed_rasters[index], copy=True)
@@ -539,10 +693,9 @@ class NOxDataset(Dataset):
             torch.tensor(self.labels[index]),
             index,
         )
-        if self.delta_target_path is None:
+        if self.contribution_target_path is None:
             return item
-        if self._delta_targets is None:
-            self._delta_targets = np.load(self.delta_target_path, mmap_mode="r")
-        target = np.array(self._delta_targets[index], dtype=np.float32, copy=True)
-        normalized_target = (target - self.delta_target_center) / self.delta_target_scale
-        return (*item, torch.from_numpy(normalized_target))
+        if self._contribution_targets is None:
+            self._contribution_targets = np.load(self.contribution_target_path, mmap_mode="r")
+        target = np.array(self._contribution_targets[index], dtype=np.float32, copy=True)
+        return (*item, torch.from_numpy(target))

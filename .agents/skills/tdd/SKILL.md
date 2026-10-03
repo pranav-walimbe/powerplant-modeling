@@ -1,17 +1,22 @@
 ---
 name: tdd
-description: Test-driven development with red-green-refactor loop. Use when user wants to build features or fix bugs using TDD, mentions "red-green-refactor", wants integration tests, or asks for test-first development.
+description: Minimal local test-driven development with a red-green-refactor loop. Use only when the user explicitly asks for TDD, red-green-refactor, test-first development, or a focused unit test. Do not use for integration or end-to-end testing.
 ---
 
 # Test-Driven Development
 
+## Repository Constraints
+
+- Unit tests are local verification artifacts under the ignored `/tests/` directory.
+- Never force-add a test or modify ignore rules to place tests under Git tracking.
+- Never add integration, end-to-end, snapshot, plotting, filesystem, network, subprocess, or artifact-producing tests.
+- Prefer no new test when lint, type, compile, or a direct smoke command verifies the change adequately.
+- Delete stale tests rather than preserving obsolete interfaces or behavior.
+- Confirm every new test is ignored with `git check-ignore` and absent from `git status`.
+
 ## Philosophy
 
-**Core principle**: Tests should verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't.
-
-**Good tests** are integration-style: they exercise real code paths through public APIs. They describe _what_ the system does, not _how_ it does it. A good test reads like a specification - "user can checkout with valid cart" tells you exactly what capability exists. These tests survive refactors because they don't care about internal structure.
-
-**Bad tests** are coupled to implementation. They mock internal collaborators, test private methods, or verify through external means (like querying a database directly instead of using the interface). The warning sign: your test breaks when you refactor, but behavior hasn't changed. If you rename an internal function and tests fail, those tests were testing implementation, not behavior.
+Write the smallest isolated unit test that proves the critical invariant. Avoid broad fixtures, real services, file writes, and incidental assertions. A test may exercise a private pure helper when that is the narrowest stable boundary.
 
 See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
 
@@ -48,16 +53,11 @@ When exploring the codebase, use the project's domain glossary so that test name
 
 Before writing any code:
 
-- [ ] Confirm with user what interface changes are needed
-- [ ] Confirm with user which behaviors to test (prioritize)
-- [ ] Identify opportunities for [deep modules](deep-modules.md) (small interface, deep implementation)
-- [ ] Design interfaces for [testability](interface-design.md)
-- [ ] List the behaviors to test (not implementation steps)
-- [ ] Get user approval on the plan
+- [ ] Identify the single highest-risk behavior
+- [ ] Confirm it can be tested without integration-style setup
+- [ ] Confirm `/tests/` is ignored
 
-Ask: "What should the public interface look like? Which behaviors are most important to test?"
-
-**You can't test everything.** Confirm with the user exactly which behaviors matter most. Focus testing effort on critical paths and complex logic, not every possible edge case.
+Do not expand a code request into a test-suite project.
 
 ### 2. Tracer Bullet
 
@@ -68,11 +68,11 @@ RED:   Write test for first behavior → test fails
 GREEN: Write minimal code to pass → test passes
 ```
 
-This is your tracer bullet - proves the path works end-to-end.
+This tracer bullet proves the narrow behavior before implementation expands.
 
 ### 3. Incremental Loop
 
-For each remaining behavior:
+Only if another critical behavior remains unverified:
 
 ```
 RED:   Write next test → fails
@@ -85,6 +85,7 @@ Rules:
 - Only enough code to pass current test
 - Don't anticipate future tests
 - Keep tests focused on observable behavior
+- Stop as soon as the critical invariant is covered
 
 ### 4. Refactor
 
@@ -102,8 +103,9 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 
 ```
 [ ] Test describes behavior, not implementation
-[ ] Test uses public interface only
 [ ] Test would survive internal refactor
 [ ] Code is minimal for this test
 [ ] No speculative features added
+[ ] Test performs no integration-style I/O
+[ ] Test remains ignored and untracked
 ```

@@ -1,6 +1,9 @@
 """Convolutional recurrent network for emissions-change classification."""
 
+import math
+
 import torch
+from modeling.dataset import CONTRIBUTION_CHANNEL_NAMES, CONTRIBUTION_TARGET_SIZE
 from modeling.mlp import SEASONAL_EMBEDDING_DIM, build_seasonal_encoder
 from torch import nn
 from torch.nn import functional as F
@@ -236,7 +239,7 @@ class VisionClassifier(nn.Module):
 
 
 class JointVisionClassifier(VisionClassifier):
-    """Predict the change class and an auxiliary 12x12 delta raster."""
+    """Predict the change class and two auxiliary contribution rasters."""
 
     def __init__(
         self,
@@ -255,6 +258,9 @@ class JointVisionClassifier(VisionClassifier):
             context_dropout=context_dropout,
         )
         decoder_width = model_width // 2
+        raster_output = nn.Conv2d(decoder_width, len(CONTRIBUTION_CHANNEL_NAMES), kernel_size=1)
+        initial_probability = 1.0 / (len(CONTRIBUTION_CHANNEL_NAMES) * CONTRIBUTION_TARGET_SIZE**2)
+        nn.init.constant_(raster_output.bias, math.log(initial_probability / (1.0 - initial_probability)))
         self.raster_decoder = nn.Sequential(
             ResidualBlock(model_width, model_width),
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
@@ -262,7 +268,12 @@ class JointVisionClassifier(VisionClassifier):
             _group_norm(decoder_width),
             nn.SiLU(inplace=True),
             ResidualBlock(decoder_width, decoder_width),
-            nn.Conv2d(decoder_width, 1, kernel_size=1),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(decoder_width, decoder_width, kernel_size=3, padding=1, bias=False),
+            _group_norm(decoder_width),
+            nn.SiLU(inplace=True),
+            ResidualBlock(decoder_width, decoder_width),
+            raster_output,
         )
 
     def forward(
@@ -271,7 +282,7 @@ class JointVisionClassifier(VisionClassifier):
         seasonal: torch.Tensor,
         transport: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return class logits and the normalized auxiliary raster."""
+        """Return class logits and bounded decrease-increase contribution rasters."""
         observation_features = self._encode_frames(
             self.observation_encoder,
             self._observation_sequence(image),
@@ -290,4 +301,4 @@ class JointVisionClassifier(VisionClassifier):
             residual_shift,
         )
         logits = self.classifier(self._project_hidden(hidden))
-        return logits, self.raster_decoder(hidden).squeeze(1)
+        return logits, self.raster_decoder(hidden).sigmoid()

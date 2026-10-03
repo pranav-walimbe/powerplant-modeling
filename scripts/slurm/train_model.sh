@@ -45,7 +45,10 @@ training_output=$(mktemp "/global/home/users/pranavwalimbe/.cache/train-no2-${SL
 trap 'rm -f -- "${training_output}"' EXIT
 recipient="pranav.walimbe@berkeley.edu"
 raster_loss_weight="${RASTER_LOSS_WEIGHT:-1.0}"
-target_smoothing_sigma="${TARGET_SMOOTHING_SIGMA:-1.5}"
+contribution_splat_sigma="${CONTRIBUTION_SPLAT_SIGMA:-1.5}"
+sinkhorn_blur_cells="${SINKHORN_BLUR_CELLS:-1.5}"
+sinkhorn_reach_cells="${SINKHORN_REACH_CELLS:-6.0}"
+sinkhorn_iterations="${SINKHORN_ITERATIONS:-30}"
 
 # Slurm 22.05 and later stopped propagating --cpus-per-task into srun
 export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
@@ -69,7 +72,10 @@ srun python -u -m modeling.train \
     --scheduler-factor 0.50 \
     --early-stop-patience 15 \
     --raster-loss-weight "${raster_loss_weight}" \
-    --target-smoothing-sigma "${target_smoothing_sigma}" \
+    --contribution-splat-sigma "${contribution_splat_sigma}" \
+    --sinkhorn-blur-cells "${sinkhorn_blur_cells}" \
+    --sinkhorn-reach-cells "${sinkhorn_reach_cells}" \
+    --sinkhorn-iterations "${sinkhorn_iterations}" \
     | tee "${training_output}"
 echo "Training command completed; locating result artifacts"
 

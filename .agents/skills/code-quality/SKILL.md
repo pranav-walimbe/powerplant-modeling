@@ -36,6 +36,26 @@ Apply consistent naming, structure, and patterns so code is readable and maintai
 3. **Suggest concrete fixes** — Rename symbols, extract functions, add types, fix formatting. Prefer one logical edit per suggestion.
 4. **Document exceptions** — If the project has an exception (e.g. "use any here for legacy"), note it rather than "fixing" it without context.
 
+## Repository Testing Policy
+
+- Keep testing highly minimal. Prefer lint, type, compile, or direct smoke commands over adding test files.
+- When a code change needs a regression test, add only the smallest isolated unit test that proves the critical invariant.
+- Do not add integration, end-to-end, snapshot, plotting, filesystem, network, subprocess, or artifact-producing tests.
+- Keep unit tests under the ignored `/tests/` directory. Never force-add tests or change ignore rules to place tests under Git tracking.
+- Before handoff, run `git check-ignore` on any new test and confirm `git status` does not include it.
+- Delete stale local tests instead of adapting production code to obsolete contracts.
+
+## Minimal Parameter Validation
+
+- Default to no manual parameter validation in scripts.
+- Trust internal callers, repository constants, scheduler-provided values, and values already constrained by a parser or typed API.
+- Validate an external parameter only when the check prevents a destructive action or replaces a materially unclear downstream failure.
+- Use the entrypoint's native mechanism once. Prefer `argparse` choices and types in Python or `${VAR:?message}` for a genuinely required shell variable.
+- Do not repeat the same constraint after parsing or validate values again in helper functions.
+- Do not add speculative range, existence, type, enum, cross-field, or environment checks for states the current workflow does not produce.
+- Do not create validation helpers, schemas, or exception classes for one-off script parameters.
+- Preserve the minimum checks needed to resolve destructive targets to explicit safe paths.
+
 ## Naming Conventions
 
 ### Variables and functions
@@ -296,6 +316,8 @@ The transferable part is the *shape* of the class, not these three rows: a falsy
 - [ ] Files and structure match existing layout
 - [ ] No magic numbers; constants named
 - [ ] Lint and format rules pass (if project has them)
+- [ ] Any new unit test is minimal and remains untracked
+- [ ] Script parameters have no redundant or speculative validation
 
 ## Anti-patterns
 

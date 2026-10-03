@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import math
 import random
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,10 +19,13 @@ from modeling.convgru import (
     JointVisionClassifier,
 )
 from modeling.dataset import (
+    CONTRIBUTION_TARGET_SIZE,
     MODEL_FEATURE_NAMES,
     NormalizationStats,
     NOxDataset,
     compute_stats,
+    contribution_target_metadata,
+    materialize_contribution_targets,
     save_stats,
 )
 from modeling.eval_utils import (
@@ -38,7 +40,6 @@ from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import (
     plot_accuracy_by_characteristic,
     plot_joint_prediction_samples,
-    plot_ops_evaluation,
     plot_split_class_f1,
     plot_training_curves,
 )
@@ -56,7 +57,6 @@ from config import (
     MODEL_MASK_KEYS,
     MODEL_TARGET_COL,
     NUM_CORES,
-    OPS_DATASET_CSV,
     PRETRAINED_MASKED_MODEL_WEIGHTS,
     RUNS_DIR,
     SEQUENCE_TIMESTEPS,
@@ -76,13 +76,126 @@ DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
 DEFAULT_RASTER_LOSS_WEIGHT = 1.0
-DEFAULT_TARGET_SMOOTHING_SIGMA = 1.5
-JOINT_PLOT_SAMPLE_COUNT = 20
-DELTA_TARGET_SIZE = 12
-DELTA_TARGET_UPWIND_FRACTION = 1.0 / 3.0
-DELTA_TARGET_MIN_WIND_SPEED_MPS = 0.5
-ROBUST_STD_NORMALIZER = 1.349
-MIN_TARGET_SCALE = 1e-12
+DEFAULT_CONTRIBUTION_SPLAT_SIGMA = 1.5
+DEFAULT_SINKHORN_BLUR_CELLS = 1.5
+DEFAULT_SINKHORN_REACH_CELLS = 6.0
+DEFAULT_SINKHORN_ITERATIONS = 30
+JOINT_PLOT_SAMPLE_COUNTS = {
+    "decrease": 7,
+    "steady": 6,
+    "increase": 7,
+}
+
+
+class UnbalancedSinkhornLoss(nn.Module):
+    """Compare nonnegative rasters with a debiased unbalanced transport loss."""
+
+    def __init__(
+        self,
+        grid_size: int,
+        *,
+        blur_cells: float,
+        reach_cells: float,
+        iterations: int,
+    ) -> None:
+        super().__init__()
+        offsets = torch.arange(-(grid_size - 1), grid_size, dtype=torch.float32)
+        kernel = torch.exp(-0.5 * (offsets / blur_cells).square())
+        self.register_buffer("kernel", kernel)
+        self.entropy = (blur_cells / reach_cells) ** 2
+        self.mass_exponent = 1.0 / (1.0 + self.entropy)
+        self.iterations = iterations
+
+    def _apply_kernel(self, values: torch.Tensor) -> torch.Tensor:
+        # Apply the separable Gaussian transport kernel with zero padding
+        radius = self.kernel.numel() // 2
+        horizontal = F.conv2d(
+            values,
+            self.kernel.view(1, 1, 1, -1),
+            padding=(0, radius),
+        )
+        return F.conv2d(
+            horizontal,
+            self.kernel.view(1, 1, -1, 1),
+            padding=(radius, 0),
+        )
+
+    @staticmethod
+    def _generalized_kl(values: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+        # Sum generalized KL over one flattened raster batch
+        tiny = torch.finfo(values.dtype).tiny
+        log_ratio_term = torch.where(
+            values > 0.0,
+            values * (values.clamp_min(tiny).log() - reference.clamp_min(tiny).log()),
+            torch.zeros_like(values),
+        )
+        return (log_ratio_term - values + reference).sum(dim=(1, 2, 3))
+
+    def _regularized_transport(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # Compute an entropy-regularized unbalanced transport cost per raster
+        source_mass = source.sum(dim=(1, 2, 3))
+        target_mass = target.sum(dim=(1, 2, 3))
+        costs = source_mass + target_mass
+        active = (source_mass > 0.0) & (target_mass > 0.0)
+        if not active.any():
+            return costs
+
+        active_source = source[active]
+        active_target = target[active]
+        with torch.no_grad():
+            source_scaling = torch.ones_like(active_source)
+            target_scaling = torch.ones_like(active_target)
+            for _ in range(self.iterations):
+                source_scaling = self._apply_kernel(active_target * target_scaling).clamp_min(1e-12).pow(
+                    -self.mass_exponent
+                )
+                target_scaling = self._apply_kernel(active_source * source_scaling).clamp_min(1e-12).pow(
+                    -self.mass_exponent
+                )
+
+        scaled_source = active_source * source_scaling
+        scaled_target = active_target * target_scaling
+        source_marginal = scaled_source * self._apply_kernel(scaled_target)
+        target_marginal = scaled_target * self._apply_kernel(scaled_source)
+        transported_mass = source_marginal.sum(dim=(1, 2, 3))
+        entropy_cost = self.entropy * (
+            torch.special.xlogy(source_marginal, source_scaling).sum(dim=(1, 2, 3))
+            + torch.special.xlogy(target_marginal, target_scaling).sum(dim=(1, 2, 3))
+            - transported_mass
+            + source_mass[active] * target_mass[active]
+        )
+        costs[active] = (
+            entropy_cost
+            + self._generalized_kl(source_marginal, active_source)
+            + self._generalized_kl(target_marginal, active_target)
+        )
+        return costs
+
+    def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Return one channel-averaged Sinkhorn divergence per sample.
+
+        Args:
+            prediction: Nonnegative rasters shaped batch by channel by height by width.
+            target: Nonnegative rasters matching ``prediction``.
+
+        Returns:
+            Per-sample losses that remain defined for all-zero target channels.
+        """
+        batch_size, channels, height, width = prediction.shape
+        predicted_maps = prediction.float().reshape(batch_size * channels, 1, height, width)
+        target_maps = target.float().reshape(batch_size * channels, 1, height, width)
+        cross_cost = self._regularized_transport(predicted_maps, target_maps)
+        prediction_self_cost = self._regularized_transport(predicted_maps, predicted_maps)
+        target_self_cost = self._regularized_transport(target_maps, target_maps)
+        prediction_mass = predicted_maps.sum(dim=(1, 2, 3))
+        target_mass = target_maps.sum(dim=(1, 2, 3))
+        divergence = (
+            cross_cost
+            - 0.5 * prediction_self_cost
+            - 0.5 * target_self_cost
+            + 0.5 * self.entropy * (prediction_mass - target_mass).square()
+        )
+        return divergence.clamp_min(0.0).reshape(batch_size, channels).mean(dim=1)
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,10 +222,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scheduler-factor", type=float, default=DEFAULT_SCHEDULER_FACTOR)
     parser.add_argument("--early-stop-patience", type=int, default=DEFAULT_EARLY_STOP_PATIENCE)
     parser.add_argument("--raster-loss-weight", type=float, default=DEFAULT_RASTER_LOSS_WEIGHT)
-    parser.add_argument("--target-smoothing-sigma", type=float, default=DEFAULT_TARGET_SMOOTHING_SIGMA)
+    parser.add_argument("--contribution-splat-sigma", type=float, default=DEFAULT_CONTRIBUTION_SPLAT_SIGMA)
+    parser.add_argument("--sinkhorn-blur-cells", type=float, default=DEFAULT_SINKHORN_BLUR_CELLS)
+    parser.add_argument("--sinkhorn-reach-cells", type=float, default=DEFAULT_SINKHORN_REACH_CELLS)
+    parser.add_argument("--sinkhorn-iterations", type=int, default=DEFAULT_SINKHORN_ITERATIONS)
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
-    parser.add_argument("--ops-manifest-path", default=OPS_DATASET_CSV)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     return parser.parse_args()
 
@@ -150,7 +265,7 @@ def _move_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[
 
 def _move_joint_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> tuple[torch.Tensor, ...]:
     # Move joint classification and raster supervision onto the training device
-    image, seasonal, transport, target, index, delta_target = batch
+    image, seasonal, transport, target, index, contribution_target = batch
     non_blocking = device.type == "cuda"
     return (
         image.to(device, non_blocking=non_blocking),
@@ -158,7 +273,7 @@ def _move_joint_batch(batch: tuple[torch.Tensor, ...], device: torch.device) -> 
         transport.to(device, non_blocking=non_blocking),
         target.to(device, non_blocking=non_blocking),
         index,
-        delta_target.to(device, non_blocking=non_blocking),
+        contribution_target.to(device, non_blocking=non_blocking),
     )
 
 
@@ -327,28 +442,12 @@ def fit_model(
     return train_losses, val_losses, best_validation_macro_f1, best_validation_loss
 
 
-def raster_l1(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-) -> torch.Tensor:
-    """Return one unweighted raster L1 value per sample.
-
-    Args:
-        prediction: Predicted normalized rasters shaped batch by height by width.
-        target: Target normalized rasters matching ``prediction``.
-
-    Returns:
-        Per-sample mean absolute errors.
-    """
-    spatial_dimensions = tuple(range(1, prediction.ndim))
-    return (prediction - target).abs().mean(dim=spatial_dimensions)
-
-
 def train_joint_epoch(
     model: JointVisionClassifier,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     criterion: nn.CrossEntropyLoss,
+    raster_criterion: UnbalancedSinkhornLoss,
     class_weights: torch.Tensor,
     scaler: torch.cuda.amp.GradScaler,
     device: torch.device,
@@ -363,14 +462,15 @@ def train_joint_epoch(
     correct = 0
     amp_enabled = device.type == "cuda"
     for batch in loader:
-        image, seasonal, transport, target, _, delta_target = _move_joint_batch(batch, device)
+        image, seasonal, transport, target, _, contribution_target = _move_joint_batch(batch, device)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=amp_enabled):
             logits, raster_prediction = model(image, seasonal, transport)
             per_record_classification = criterion(logits, target)
             classification_weight = class_weights[target].sum()
             classification_loss = per_record_classification.sum() / classification_weight
-            per_record_raster = raster_l1(raster_prediction, delta_target)
+            with torch.autocast(device_type=device.type, enabled=False):
+                per_record_raster = raster_criterion(raster_prediction, contribution_target)
             raster_loss = per_record_raster.mean()
             loss = classification_loss + raster_loss_weight * raster_loss
         scaler.scale(loss).backward()
@@ -392,6 +492,7 @@ def val_joint_epoch(
     model: JointVisionClassifier,
     loader: DataLoader,
     criterion: nn.CrossEntropyLoss,
+    raster_criterion: UnbalancedSinkhornLoss,
     class_weights: torch.Tensor,
     device: torch.device,
     raster_loss_weight: float,
@@ -407,11 +508,12 @@ def val_joint_epoch(
     amp_enabled = device.type == "cuda"
     with torch.inference_mode():
         for batch in loader:
-            image, seasonal, transport, target, _, delta_target = _move_joint_batch(batch, device)
+            image, seasonal, transport, target, _, contribution_target = _move_joint_batch(batch, device)
             with torch.autocast(device_type=device.type, enabled=amp_enabled):
                 logits, raster_prediction = model(image, seasonal, transport)
                 per_record_classification = criterion(logits, target)
-                per_record_raster = raster_l1(raster_prediction, delta_target)
+                with torch.autocast(device_type=device.type, enabled=False):
+                    per_record_raster = raster_criterion(raster_prediction, contribution_target)
             predicted = logits.argmax(dim=1)
             total_classification_loss += per_record_classification.sum().item()
             total_classification_weight += class_weights[target].sum().item()
@@ -460,6 +562,12 @@ def fit_joint_model(
     optimizer = torch.optim.AdamW(trainable_parameters, lr=learning_rate, weight_decay=args.weight_decay)
     class_weights = torch.tensor(class_weight_values, dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
+    raster_criterion = UnbalancedSinkhornLoss(
+        CONTRIBUTION_TARGET_SIZE,
+        blur_cells=args.sinkhorn_blur_cells,
+        reach_cells=args.sinkhorn_reach_cells,
+        iterations=args.sinkhorn_iterations,
+    ).to(device)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -481,6 +589,7 @@ def fit_joint_model(
             train_loader,
             optimizer,
             criterion,
+            raster_criterion,
             class_weights,
             scaler,
             device,
@@ -492,6 +601,7 @@ def fit_joint_model(
                 model,
                 val_loader,
                 criterion,
+                raster_criterion,
                 class_weights,
                 device,
                 args.raster_loss_weight,
@@ -525,7 +635,7 @@ def fit_joint_model(
                     "model_state_dict": model.state_dict(),
                     "validation_loss": validation_total,
                     "validation_classification_loss": validation_classification,
-                    "validation_raster_l1": validation_raster,
+                    "validation_raster_sinkhorn": validation_raster,
                     "validation_accuracy": validation_accuracy,
                     "validation_macro_f1": validation_macro_f1,
                     **checkpoint_metadata,
@@ -563,7 +673,7 @@ def _load_masked_checkpoint(path: Path, device: torch.device) -> tuple[dict[str,
     # Load the reconstruction model used to fill missing NO2 pixels
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     if tuple(checkpoint["image_keys"]) != tuple(MODEL_IMAGE_KEYS):
-        raise ValueError("Masked checkpoint image keys do not match delta raster channels")
+        raise ValueError("Masked checkpoint image keys do not match classifier raster channels")
     model = MaskedNO2Autoencoder().to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -619,152 +729,6 @@ def _fill_missing_rasters(
             del destination, loader
             paths[split] = destination_path
     return paths
-
-
-def _grid_coordinates(height: int, width: int, reference: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    # Return east and north pixel offsets from the raster center
-    rows = torch.arange(height, dtype=reference.dtype, device=reference.device) - (height - 1) / 2
-    columns = torch.arange(width, dtype=reference.dtype, device=reference.device) - (width - 1) / 2
-    east, south = torch.meshgrid(columns, rows, indexing="xy")
-    return east, -south
-
-
-def _upwind_background(no2: torch.Tensor, wind_u: torch.Tensor, wind_v: torch.Tensor) -> torch.Tensor:
-    # Estimate one background per sample and timestep
-    batch_size, timesteps, height, width = no2.shape
-    reference_u = torch.nanmedian(wind_u.reshape(batch_size, timesteps, -1), dim=-1).values
-    reference_v = torch.nanmedian(wind_v.reshape(batch_size, timesteps, -1), dim=-1).values
-    finite_wind = torch.isfinite(reference_u) & torch.isfinite(reference_v)
-    safe_u = torch.where(finite_wind, reference_u, torch.zeros_like(reference_u))
-    safe_v = torch.where(finite_wind, reference_v, torch.zeros_like(reference_v))
-    speed = torch.hypot(safe_u, safe_v)
-
-    east, north = _grid_coordinates(height, width, no2)
-    safe_speed = speed.clamp_min(DELTA_TARGET_MIN_WIND_SPEED_MPS)
-    along_wind = (
-        east[None, None] * safe_u[:, :, None, None]
-        + north[None, None] * safe_v[:, :, None, None]
-    ) / safe_speed[:, :, None, None]
-    cutoff = torch.quantile(along_wind.flatten(2), DELTA_TARGET_UPWIND_FRACTION, dim=-1)
-    upwind_values = no2.masked_fill(along_wind > cutoff[:, :, None, None], torch.nan)
-    upwind_background = torch.nanmedian(upwind_values.flatten(2), dim=-1).values
-    full_background = torch.nanmedian(no2.flatten(2), dim=-1).values
-    use_upwind = (
-        finite_wind
-        & (speed >= DELTA_TARGET_MIN_WIND_SPEED_MPS)
-        & torch.isfinite(upwind_background)
-    )
-    return torch.where(use_upwind, upwind_background, full_background)
-
-
-def _window_means(values: torch.Tensor, elapsed_hours: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    # Calculate early and late trapezoidal means
-    interval_means = (values[:, :-1] + values[:, 1:]) / 2.0
-    spatial_dimensions = (1,) * (values.ndim - 2)
-    weights = elapsed_hours.reshape(elapsed_hours.shape[0], elapsed_hours.shape[1], *spatial_dimensions)
-    early = (interval_means[:, :2] * weights[:, :2]).sum(dim=1) / weights[:, :2].sum(dim=1)
-    late = (interval_means[:, 2:] * weights[:, 2:]).sum(dim=1) / weights[:, 2:].sum(dim=1)
-    return early, late
-
-
-def _gaussian_smooth(values: torch.Tensor, sigma: float) -> torch.Tensor:
-    # Smooth the pooled target in target-grid cells
-    if sigma == 0.0:
-        return values
-    radius = max(1, math.ceil(3.0 * sigma))
-    coordinates = torch.arange(-radius, radius + 1, dtype=values.dtype, device=values.device)
-    kernel_1d = torch.exp(-0.5 * (coordinates / sigma).square())
-    kernel_1d = kernel_1d / kernel_1d.sum()
-    kernel_2d = torch.outer(kernel_1d, kernel_1d)[None, None]
-    padded = F.pad(values[:, None], (radius, radius, radius, radius), mode="replicate")
-    return F.conv2d(padded, kernel_2d).squeeze(1)
-
-
-def _delta_raster_target(
-    physical_image: torch.Tensor,
-    elapsed_hours: torch.Tensor,
-    smoothing_sigma: float,
-) -> torch.Tensor:
-    # Build a pooled and smoothed physical NO2-change target
-    no2 = physical_image[:, :, MODEL_IMAGE_KEYS.index("no2")]
-    background = _upwind_background(
-        no2,
-        physical_image[:, :, MODEL_IMAGE_KEYS.index("wind_u_80m_mps")],
-        physical_image[:, :, MODEL_IMAGE_KEYS.index("wind_v_80m_mps")],
-    )
-    early, late = _window_means(no2 - background[:, :, None, None], elapsed_hours)
-    target = late - early
-    pool_factor = physical_image.shape[-1] // DELTA_TARGET_SIZE
-    pooled = F.avg_pool2d(target[:, None], pool_factor).squeeze(1)
-    return _gaussian_smooth(pooled, smoothing_sigma)
-
-
-def _delta_target_metadata(smoothing_sigma: float) -> dict[str, float | int | str]:
-    # Describe the auxiliary target construction
-    return {
-        "target_size": DELTA_TARGET_SIZE,
-        "smoothing_sigma_cells": smoothing_sigma,
-        "upwind_fraction": DELTA_TARGET_UPWIND_FRACTION,
-        "min_wind_speed_mps": DELTA_TARGET_MIN_WIND_SPEED_MPS,
-        "background_method": "per_timestep_wind_relative_upwind_third_median",
-        "calm_wind_fallback": "full_raster_median",
-        "temporal_method": "late_minus_early_trapezoidal_mean",
-        "no2_source": "masked_model_completed_physical_units",
-    }
-
-
-def _materialize_delta_targets(
-    completed_paths: dict[str, Path],
-    datasets: dict[str, NOxDataset],
-    source_image_stats: dict[str, object],
-    *,
-    output_dir: Path,
-    batch_size: int,
-    smoothing_sigma: float,
-) -> dict[str, Path]:
-    # Materialize physical auxiliary targets
-    output_dir.mkdir(parents=True, exist_ok=False)
-    source_center = np.asarray(source_image_stats["image_center"], dtype=np.float32)
-    source_scale = np.asarray(source_image_stats["image_scale"], dtype=np.float32)
-    target_paths: dict[str, Path] = {}
-    with torch.inference_mode():
-        for split, dataset in datasets.items():
-            completed = np.load(completed_paths[split], mmap_mode="r")
-            target_path = output_dir / f"{split}_delta_targets.npy"
-            target_destination = np.lib.format.open_memmap(
-                target_path,
-                mode="w+",
-                dtype=np.float32,
-                shape=(len(dataset), DELTA_TARGET_SIZE, DELTA_TARGET_SIZE),
-            )
-            batch_count = math.ceil(len(dataset) / batch_size)
-            for batch_number, start in enumerate(range(0, len(dataset), batch_size), start=1):
-                stop = min(start + batch_size, len(dataset))
-                completed_batch = np.asarray(completed[start:stop])
-                numeric = completed_batch[:, :, : len(MODEL_IMAGE_KEYS)]
-                physical = numeric * source_scale[None, None, :, None, None]
-                physical = physical + source_center[None, None, :, None, None]
-                elapsed_hours = dataset.elapsed_hours[start:stop]
-                target = _delta_raster_target(
-                    torch.from_numpy(physical),
-                    torch.from_numpy(elapsed_hours),
-                    smoothing_sigma,
-                )
-                target_destination[start:stop] = target.numpy()
-                if batch_number % 100 == 0 or batch_number == batch_count:
-                    print(f"Delta-target construction {split}: {batch_number:,}/{batch_count:,} batches")
-            target_destination.flush()
-            del completed, target_destination
-            target_paths[split] = target_path
-    return target_paths
-
-
-def _fit_delta_target_stats(path: Path) -> dict[str, float]:
-    # Fit robust auxiliary-target normalization on training values only
-    target = np.load(path, mmap_mode="r")
-    lower, center, upper = np.percentile(target, (25.0, 50.0, 75.0))
-    scale = max(float(upper - lower) / ROBUST_STD_NORMALIZER, MIN_TARGET_SCALE)
-    return {"center": float(center), "scale": scale}
 
 
 def _fit_transport_residual_stats(
@@ -875,22 +839,55 @@ def _prediction_frame(
     return frame
 
 
+def _spectrum_sample_positions(
+    changes: np.ndarray,
+    labels: np.ndarray,
+    record_indices: np.ndarray,
+) -> np.ndarray:
+    # Select quantile-spaced examples per class and order them by signed change
+    if not (len(changes) == len(labels) == len(record_indices)):
+        raise ValueError("Changes, labels, and record indices must have equal lengths")
+    if not np.isfinite(changes).all():
+        raise ValueError("Joint-plot sample changes must be finite")
+
+    selected_positions = []
+    for class_index, class_name in enumerate(MODEL_CLASS_NAMES):
+        candidates = np.flatnonzero(labels == class_index)
+        requested = JOINT_PLOT_SAMPLE_COUNTS[class_name]
+        if len(candidates) < requested:
+            raise ValueError(
+                f"Joint plot requires {requested} {class_name} records; found {len(candidates)}"
+            )
+        ordered = candidates[
+            np.lexsort((record_indices[candidates], changes[candidates]))
+        ]
+        ranks = np.rint(np.linspace(0, len(ordered) - 1, requested)).astype(np.int64)
+        selected_positions.extend(ordered[ranks])
+
+    selected = np.asarray(selected_positions, dtype=np.int64)
+    return selected[np.lexsort((record_indices[selected], changes[selected]))]
+
+
 def _joint_prediction_sample_arrays(
     dataset: NOxDataset,
     indices: np.ndarray,
     probabilities: np.ndarray,
     raster_predictions: np.ndarray,
     transport_residual_stats: dict[str, float],
-    seed: int,
 ) -> tuple[np.ndarray, ...]:
-    # Collect deterministic test examples in physical units
-    rng = np.random.default_rng(seed)
-    positions = np.sort(rng.choice(len(indices), size=JOINT_PLOT_SAMPLE_COUNT, replace=False))
+    # Collect a deterministic decrease-to-increase spectrum in physical units
+    sample_frame = dataset.frame.iloc[indices]
+    changes = (
+        sample_frame["avg_nox_end"].to_numpy(dtype=np.float64)
+        - sample_frame["avg_nox_start"].to_numpy(dtype=np.float64)
+    )
+    labels = dataset.labels[indices]
+    positions = _spectrum_sample_positions(changes, labels, indices)
     sample_indices = indices[positions]
     records = [dataset[int(index)] for index in sample_indices]
     images = np.stack([record[0].numpy() for record in records])
     transport = np.stack([record[2].numpy() for record in records])
-    normalized_targets = np.stack([record[5].numpy() for record in records])
+    target_rasters = np.stack([record[5].numpy() for record in records])
 
     no2_channel = MODEL_IMAGE_KEYS.index("no2")
     no2_rasters = images[:, :, no2_channel]
@@ -900,11 +897,8 @@ def _joint_prediction_sample_arrays(
         transport_residuals * transport_residual_stats["scale"]
         + transport_residual_stats["center"]
     )
-    target_rasters = normalized_targets * dataset.delta_target_scale + dataset.delta_target_center
-    predicted_rasters = (
-        raster_predictions[positions] * dataset.delta_target_scale + dataset.delta_target_center
-    )
-    true_classes = dataset.labels[sample_indices]
+    predicted_rasters = raster_predictions[positions]
+    true_classes = labels[positions]
     predicted_classes = probabilities[positions].argmax(axis=1)
     return (
         no2_rasters,
@@ -913,6 +907,7 @@ def _joint_prediction_sample_arrays(
         predicted_rasters,
         true_classes,
         predicted_classes,
+        changes[positions],
     )
 
 
@@ -943,7 +938,7 @@ def main() -> None:
     if not args.pretrained_masked_model_weights:
         raise ValueError("Set PRETRAINED_MASKED_MODEL_WEIGHTS or pass --pretrained-masked-model-weights")
 
-    run_name = datetime.now(timezone.utc).strftime("delta_joint_raster_%Y%m%d_%H%M%S")
+    run_name = datetime.now(timezone.utc).strftime("contribution_joint_raster_%Y%m%d_%H%M%S")
     run_dir = Path(RUNS_DIR) / run_name
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
@@ -967,18 +962,22 @@ def main() -> None:
         args=args,
         device=device,
     )
-    delta_target_metadata = _delta_target_metadata(args.target_smoothing_sigma)
-    delta_target_paths = _materialize_delta_targets(
-        completed_paths,
+    contribution_metadata = contribution_target_metadata(args.contribution_splat_sigma)
+    raster_loss_metadata = {
+        "name": "debiased_unbalanced_sinkhorn_divergence",
+        "blur_cells": args.sinkhorn_blur_cells,
+        "reach_cells": args.sinkhorn_reach_cells,
+        "iterations": args.sinkhorn_iterations,
+        "channel_reduction": "mean",
+        "steady_and_inactive_channels": "zero_mass_targets",
+    }
+    contribution_target_paths = materialize_contribution_targets(
         source_datasets,
-        masked_image_stats,
-        output_dir=completed_dir / "delta-targets",
-        batch_size=args.batch_size,
-        smoothing_sigma=args.target_smoothing_sigma,
+        completed_dir / "contribution-targets",
+        sigma=args.contribution_splat_sigma,
     )
-    delta_target_stats = _fit_delta_target_stats(delta_target_paths["train"])
-    with (run_dir / "delta_target_stats.json").open("w") as destination:
-        json.dump({**delta_target_stats, **delta_target_metadata}, destination, indent=2)
+    with (run_dir / "contribution_target_metadata.json").open("w") as destination:
+        json.dump(contribution_metadata, destination, indent=2)
     del imputation_model, source_datasets
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -1016,9 +1015,7 @@ def main() -> None:
             source_image_stats=masked_image_stats,
             transport_transform=transport_transform,
             per_timestep_context=True,
-            delta_target_path=delta_target_paths[split],
-            delta_target_center=delta_target_stats["center"],
-            delta_target_scale=delta_target_stats["scale"],
+            contribution_target_path=contribution_target_paths[split],
         )
         for split in datasets
     }
@@ -1048,14 +1045,6 @@ def main() -> None:
     histories: dict[str, tuple[list[float], list[float]]] = {}
     model_frames: dict[str, dict[str, pd.DataFrame]] = {}
     training_summaries: dict[str, dict[str, object]] = {}
-    ops_seasonal_dataset = NOxDataset(
-        "ops",
-        stats,
-        manifest_path=args.ops_manifest_path,
-        load_images=False,
-    )
-    ops_seasonal_loader = _loader(ops_seasonal_dataset, shuffle=False, args=args, device=device)
-    ops_source_splits = sorted(ops_seasonal_dataset.frame["source_split"].astype(str).unique())
 
     seasonal_model = SeasonalMLP(len(MODEL_FEATURE_NAMES)).to(device)
     print(f"Training {seasonal_model.num_params():,}-parameter seasonal classifier on {device}")
@@ -1081,8 +1070,6 @@ def main() -> None:
     for split, loader in seasonal_eval_loaders.items():
         logits, probabilities, indices, _ = run_inference(seasonal_model, loader, device)
         seasonal_frames[split] = _prediction_frame(seasonal_datasets[split], logits, probabilities, indices)
-    logits, probabilities, indices, _ = run_inference(seasonal_model, ops_seasonal_loader, device)
-    seasonal_frames["ops"] = _prediction_frame(ops_seasonal_dataset, logits, probabilities, indices)
     training_summaries["seasonal"] = {
         "maximum_epochs": args.seasonal_epochs,
         "learning_rate": args.seasonal_learning_rate,
@@ -1093,7 +1080,6 @@ def main() -> None:
     histories["seasonal"] = (seasonal_train_losses, seasonal_val_losses)
     model_frames["seasonal"] = seasonal_frames
     del seasonal_model, seasonal_train_loader, seasonal_eval_loaders, seasonal_datasets
-    del ops_seasonal_dataset, ops_seasonal_loader
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -1132,12 +1118,12 @@ def main() -> None:
             "encoder_initialization": "random",
             "transport_residual_stats": transport_residual_stats,
             "transport_config": transport_config.to_metadata(),
-            "loss": "weighted_hard_cross_entropy_plus_normalized_raster_l1",
+            "loss": "weighted_hard_cross_entropy_plus_unbalanced_sinkhorn",
             "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
-            "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
+            "raster_loss": raster_loss_metadata,
             "raster_loss_weight": args.raster_loss_weight,
             "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
-            "delta_target": {**delta_target_stats, **delta_target_metadata},
+            "contribution_target": contribution_metadata,
         },
     )
     vision_frames = {}
@@ -1153,7 +1139,6 @@ def main() -> None:
                 probabilities,
                 raster_predictions,
                 transport_residual_stats,
-                args.seed,
             )
         permutation = np.random.default_rng(args.seed).permutation(len(transport_datasets[split]))
         shuffled_logits, shuffled_probabilities, shuffled_indices, _ = run_inference(
@@ -1168,18 +1153,6 @@ def main() -> None:
             shuffled_probabilities,
             shuffled_indices,
         )
-    ops_vision_dataset = NOxDataset(
-        "ops",
-        stats,
-        manifest_path=args.ops_manifest_path,
-        completed_raster_paths=completed_paths,
-        source_image_stats=masked_image_stats,
-        transport_transform=transport_transform,
-        per_timestep_context=True,
-    )
-    ops_vision_loader = _loader(ops_vision_dataset, shuffle=False, args=args, device=device)
-    logits, probabilities, indices, _ = run_inference(vision_model, ops_vision_loader, device)
-    vision_frames["ops"] = _prediction_frame(ops_vision_dataset, logits, probabilities, indices)
     histories["vision"] = (vision_train_losses, vision_validation_losses)
     model_frames["vision"] = vision_frames
     training_summaries["vision"] = {
@@ -1190,27 +1163,27 @@ def main() -> None:
         "best_validation_macro_f1": vision_best_macro_f1,
         "checkpoint_validation_loss": vision_checkpoint_total_loss,
         "checkpoint_validation_classification_loss": vision_checkpoint_classification_loss,
-        "checkpoint_validation_raster_l1": vision_checkpoint_raster_loss,
+        "checkpoint_validation_raster_sinkhorn": vision_checkpoint_raster_loss,
         "encoder_initialization": "random",
-        "loss": "weighted_hard_cross_entropy_plus_normalized_raster_l1",
+        "loss": "weighted_hard_cross_entropy_plus_unbalanced_sinkhorn",
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
-        "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
+        "raster_loss": raster_loss_metadata,
         "raster_loss_weight": args.raster_loss_weight,
-        "delta_target": {**delta_target_stats, **delta_target_metadata},
+        "contribution_target": contribution_metadata,
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
         "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
     }
-    del vision_model, vision_train_loader, ops_vision_dataset, ops_vision_loader
+    del vision_model, vision_train_loader
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
     run_config = {
         "device": str(device),
         "models": ["seasonal", "vision"],
-        "loss": "weighted_hard_cross_entropy_plus_normalized_raster_l1",
+        "loss": "weighted_hard_cross_entropy_plus_unbalanced_sinkhorn",
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
-        "raster_loss": "per_sample_mean_absolute_error_on_train_normalized_target",
+        "raster_loss": raster_loss_metadata,
         "raster_loss_weight": args.raster_loss_weight,
         "class_weights": class_weights,
         "selection_metric": "validation_macro_f1",
@@ -1239,9 +1212,9 @@ def main() -> None:
         "pretrained_masked_model_role": "missing_pixel_completion_only",
         "encoder_initialization": "random",
         "completed_raster_paths": {split: str(path) for split, path in completed_paths.items()},
-        "ops_manifest_path": str(args.ops_manifest_path),
-        "ops_source_splits": ops_source_splits,
-        "delta_target_paths": {split: str(path) for split, path in delta_target_paths.items()},
+        "contribution_target_paths": {
+            split: str(path) for split, path in contribution_target_paths.items()
+        },
         "completed_raster_keys": list(MODEL_IMAGE_KEYS + MODEL_MASK_KEYS),
         "image_keys": list(stats.image_keys),
         "quality_keys": ["no2_mask", "transport_residual_quality"],
@@ -1258,11 +1231,9 @@ def main() -> None:
         "seasonal_features": list(MODEL_FEATURE_NAMES),
         "seasonal_feature_timestamp": "sequence_midpoint_local_solar_time",
         "vision_context_timestamps": "each_observation_local_solar_time_rounded_to_nearest_hour",
-        "prediction_family": "joint_three_class_and_12x12_delta_raster",
-        "delta_target": {
-            **delta_target_stats,
-            **delta_target_metadata,
-            "normalization_fit_split": "train",
+        "prediction_family": "joint_three_class_and_two_channel_contribution_raster",
+        "contribution_target": {
+            **contribution_metadata,
             "loss": "unweighted_L1",
         },
         "transport": {
@@ -1299,7 +1270,6 @@ def main() -> None:
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
     plot_joint_prediction_samples(*joint_sample_arrays, run_dir=run_dir)
-    plot_ops_evaluation(model_frames, run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")
 
 

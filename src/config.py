@@ -89,10 +89,6 @@ DATASET_DF = os.getenv(  # saved tabular features and targets
 DATASET_TEMPO_CACHE_DIR = os.path.join(DATASET_DIR, "tempo-cache")  # persistent AOI-scan regridding cache
 DATASET_WEATHER_CACHE_DIR = os.path.join(DATASET_DIR, "weather-cache")  # persistent aligned AOI-hour weather rasters
 DATASET_AOI_NORMALIZATION_STATS = os.path.join(DATASET_DIR, "aoi-no2-normalization.json")
-OPS_DATASET_CSV = os.getenv(
-    "NO2_OPS_DATASET_CSV",
-    os.path.join(DATASET_DF, "ops_df.csv"),
-)  # operations-focused validation and test evaluation manifest
 DATASET_MAX_PARALLEL_SHARDS = 8  # maximum concurrently running Slurm shard tasks
 DATASET_WORKERS_PER_SHARD = 8  # process workers and CPUs assigned to each shard task
 IMG_SIZE = 24  # image size in pixels (24x24)

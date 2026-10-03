@@ -11,7 +11,6 @@ from matplotlib.axes import Axes
 from matplotlib.container import BarContainer
 from modeling.dataset import FINAL_TIMESTEP_TIME_COLUMN, midpoint_local_solar_hour
 from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classification_metrics
-from sklearn.metrics import f1_score
 
 from config import MODEL_CLASS_NAMES
 
@@ -125,51 +124,6 @@ def plot_split_class_f1(
     figure.suptitle("Macro and per-class F1 by split and model", fontsize=16)
     figure.tight_layout()
     _save(figure, run_dir, "split_class_f1")
-
-
-def plot_ops_evaluation(
-    model_frames: dict[str, dict[str, pd.DataFrame]],
-    run_dir: str | Path,
-) -> None:
-    """Plot seasonal and vision per-class F1 on plant-operation records.
-
-    Args:
-        model_frames: Row-level predictions by model and evaluation scope.
-        run_dir: Model-run output directory.
-    """
-    sns.set_theme(style="whitegrid", font_scale=1.0)
-    models = _available_models(model_frames)
-    class_positions = np.arange(len(MODEL_CLASS_NAMES), dtype=np.float64)
-    model_width = 0.8 / len(models)
-    model_offsets = (np.arange(len(models)) - (len(models) - 1) / 2) * model_width
-    figure, axis = plt.subplots(figsize=(9, 6))
-    for model_name, offset in zip(models, model_offsets, strict=True):
-        frame = model_frames[model_name]["ops"]
-        scores = f1_score(
-            frame[TRUE_CLASS_COL],
-            frame[PREDICTED_CLASS_COL],
-            labels=np.arange(len(MODEL_CLASS_NAMES)),
-            average=None,
-            zero_division=0,
-        )
-        bars = axis.bar(
-            class_positions + offset,
-            scores,
-            width=model_width,
-            color=MODEL_COLORS[model_name],
-            label=MODEL_DISPLAY_NAMES[model_name],
-        )
-        _label_bars(axis, bars)
-    axis.set(
-        title="Plant-operations per-class F1",
-        ylabel="F1 score",
-        xticks=class_positions,
-        xticklabels=[name.title() for name in MODEL_CLASS_NAMES],
-        ylim=(0, 1.08),
-    )
-    axis.legend()
-    figure.tight_layout()
-    _save(figure, run_dir, "plant_ops_evaluation")
 
 
 def plot_training_curves(
@@ -399,6 +353,7 @@ def plot_joint_prediction_samples(
     predicted_rasters: np.ndarray,
     true_classes: np.ndarray,
     predicted_classes: np.ndarray,
+    nox_changes: np.ndarray,
     run_dir: str | Path,
 ) -> None:
     """Plot NO2 sequences, transport residuals, and joint predictions.
@@ -406,16 +361,17 @@ def plot_joint_prediction_samples(
     Args:
         no2_rasters: Physical NO2 rasters shaped sample by five timesteps by height by width.
         transport_residuals: Physical residuals shaped sample by four transitions by height by width.
-        target_rasters: Physical target rasters shaped sample by height by width.
-        predicted_rasters: Physical predicted rasters matching ``target_rasters``.
+        target_rasters: Contribution targets shaped sample by channel by height by width.
+        predicted_rasters: Predicted contribution rasters matching ``target_rasters``.
         true_classes: Integer class labels for each sample.
         predicted_classes: Integer predicted class labels for each sample.
+        nox_changes: Signed late-minus-early NOx changes in pounds per hour.
         run_dir: Model-run output directory.
     """
     sns.set_theme(style="white", font_scale=0.8)
     no2_low, no2_high = np.nanpercentile(no2_rasters, (2.0, 98.0))
     residual_limit = np.nanpercentile(np.abs(transport_residuals), 98.0)
-    target_limit = np.nanpercentile(np.abs(np.concatenate((target_rasters, predicted_rasters))), 98.0)
+    target_limit = np.nanpercentile(np.concatenate((target_rasters, predicted_rasters)), 98.0)
     column_titles = (
         "NO2 t1",
         "NO2 t2",
@@ -426,16 +382,19 @@ def plot_joint_prediction_samples(
         "Residual 2-3",
         "Residual 3-4",
         "Residual 4-5",
-        "Target raster",
-        "Predicted raster",
+        "Target decrease",
+        "Target increase",
+        "Predicted decrease",
+        "Predicted increase",
     )
     figure, axes = plt.subplots(
         len(no2_rasters),
         len(column_titles),
-        figsize=(22, 36),
+        figsize=(26, 36),
         squeeze=False,
     )
-    for row, (true_class, predicted_class) in enumerate(zip(true_classes, predicted_classes, strict=True)):
+    sample_labels = zip(true_classes, predicted_classes, nox_changes, strict=True)
+    for row, (true_class, predicted_class, nox_change) in enumerate(sample_labels):
         for timestep in range(no2_rasters.shape[1]):
             no2_image = axes[row, timestep].imshow(
                 no2_rasters[row, timestep],
@@ -451,18 +410,31 @@ def plot_joint_prediction_samples(
                 vmax=residual_limit,
             )
         target_image = axes[row, 9].imshow(
-            target_rasters[row],
-            cmap="RdBu_r",
-            vmin=-target_limit,
+            target_rasters[row, 0],
+            cmap="magma",
+            vmin=0,
             vmax=target_limit,
         )
         axes[row, 10].imshow(
-            predicted_rasters[row],
-            cmap="RdBu_r",
-            vmin=-target_limit,
+            target_rasters[row, 1],
+            cmap="magma",
+            vmin=0,
+            vmax=target_limit,
+        )
+        axes[row, 11].imshow(
+            predicted_rasters[row, 0],
+            cmap="magma",
+            vmin=0,
+            vmax=target_limit,
+        )
+        axes[row, 12].imshow(
+            predicted_rasters[row, 1],
+            cmap="magma",
+            vmin=0,
             vmax=target_limit,
         )
         axes[row, 0].set_ylabel(
+            f"NOx change: {nox_change:+.1f} lb/hr\n"
             f"True: {MODEL_CLASS_NAMES[true_class]}\nPred: {MODEL_CLASS_NAMES[predicted_class]}",
             rotation=0,
             horizontalalignment="right",
@@ -476,7 +448,10 @@ def plot_joint_prediction_samples(
     for axis, title in zip(axes[0], column_titles, strict=True):
         axis.set_title(title, fontsize=9)
 
-    figure.suptitle("Test examples: model inputs, labels, and joint predictions", fontsize=16)
+    figure.suptitle(
+        "Test examples from strongest decrease to strongest increase",
+        fontsize=16,
+    )
     figure.subplots_adjust(left=0.09, right=0.995, top=0.975, bottom=0.045, wspace=0.04, hspace=0.08)
     no2_colorbar_axis = figure.add_axes((0.10, 0.018, 0.39, 0.008))
     residual_colorbar_axis = figure.add_axes((0.535, 0.018, 0.285, 0.008))
@@ -485,5 +460,7 @@ def plot_joint_prediction_samples(
     figure.colorbar(residual_image, cax=residual_colorbar_axis, orientation="horizontal").set_label(
         "Transport residual"
     )
-    figure.colorbar(target_image, cax=target_colorbar_axis, orientation="horizontal").set_label("Delta target")
+    figure.colorbar(target_image, cax=target_colorbar_axis, orientation="horizontal").set_label(
+        "Contribution"
+    )
     _save(figure, run_dir, "joint_prediction_samples")

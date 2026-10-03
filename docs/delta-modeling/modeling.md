@@ -15,7 +15,7 @@ mask, so it can distinguish observations from filled values.
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
 | Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
-| Loss | Weighted class cross-entropy plus an unweighted auxiliary raster L1 loss |
+| Loss | Weighted class cross-entropy plus two-channel unbalanced Sinkhorn divergence |
 | Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
@@ -65,7 +65,7 @@ the active transport values directly from the transport configuration.
 The training job fits these models:
 
 - `seasonal`: the context-only MLP diagnostic;
-- `vision`: the joint context-aware class and delta-raster predictor.
+- `vision`: the joint context-aware class and contribution-raster predictor.
 
 The observation branch processes five frames. The residual branch processes
 four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
@@ -76,22 +76,51 @@ context and initializes the temporal state without a synthetic residual. Each
 later observation and aligned residual are modulated with that timestep's
 context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
 The classifier pools the final recurrent map. A separate decoder upsamples the
-same map into a `12 x 12` delta raster. The model width is 64.
+same map into bounded `24 x 24` decrease and increase contribution rasters.
+The model width is 64.
 
 This is identity-initialized FiLM with unbounded scale and additive shift.
 Training drops the full context sequence for a random share of samples. The
 job also saves predictions and metrics from shuffled-context inference.
 
+## Spatial contribution targets
+
+Before training, the pipeline parses `t0_source_pixel_nox` through
+`t4_source_pixel_nox` and aligns facilities by ID. A facility omitted at a
+timestep has zero emissions. It computes the facility's early and late
+elapsed-time-weighted trapezoidal means with the same intervals used by the
+class label, then subtracts early from late.
+
+For an increase sample, positive facility changes are normalized to sum to one
+and Gaussian-splatted into the increase channel. For a decrease sample, the
+magnitudes of negative facility changes are normalized and splatted into the
+decrease channel. The other channel is zero. Both channels are zero for steady
+samples. Thus these are class-conditioned attribution targets: a zero steady
+target does not assert that every facility was unchanged, because opposing
+facility changes may still cancel within the steady threshold.
+
+Source coordinates retain their fractional positions on the `24 x 24` input
+grid. Each clipped Gaussian is renormalized, so the active channel retains unit
+mass even near an AOI edge.
+
 ## Optimization
 
 All classifiers use inverse-frequency class weights computed only from the
 training split. Each class therefore contributes equal total weight to the
-cross-entropy objective. The joint model adds the mean absolute error over all
-pixels in the normalized target raster without quality weighting. Its total
-loss is `CE + lambda * L1`; `RASTER_LOSS_WEIGHT` configures `lambda` and
-defaults to 1.0. Input NO2 and residual-quality rasters remain unchanged.
-The `TARGET_SMOOTHING_SIGMA` launcher setting controls Gaussian target
-smoothing in 12 x 12 grid cells and defaults to 1.5.
+cross-entropy objective. The joint model compares each predicted contribution
+channel with its target using a debiased unbalanced Sinkhorn divergence. This
+penalizes spatially distant mass more than nearby mass, while mass relaxation
+keeps all-zero steady and inactive channels valid. The two channel losses are
+averaged per sample. Its total loss is
+`CE + raster_loss_weight * sinkhorn_loss`; `RASTER_LOSS_WEIGHT` configures this
+weight and defaults to 1.0.
+
+Sinkhorn scaling uses a separable Gaussian kernel in float32, avoiding a dense
+pairwise pixel-cost matrix. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
+`SINKHORN_ITERATIONS` default to 1.5, 6.0, and 30. The output head starts near
+one unit of total mass across both channels instead of the sigmoid default of
+0.5 per pixel. `CONTRIBUTION_SPLAT_SIGMA` controls target Gaussian width in
+`24 x 24` cells and defaults to 1.5. Set it to zero for nearest-cell targets.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
@@ -113,30 +142,17 @@ frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
-The trainer also evaluates both selected checkpoints on `ops_df.csv`. It uses
-the training-fitted feature and raster normalization. Operations rows map back
-to their `source_split` and `raster_bundle_path`, which lets the vision dataset
-read the completed validation and test arrays already present in job-local
-`/tmp`. The job does not run the masked imputer again for this cohort.
-
-Operations predictions appear under the `ops` scope in `results.json` and in
-model-specific prediction CSVs. This evaluation does not affect checkpointing,
-early stopping, or learning-rate scheduling. The current manifest pools
-validation and test AOIs, so use the operations metrics as a targeted
-diagnostic rather than a test-only result.
-
-The trainer produces five figures:
+The trainer produces four figures:
 
 - `split_class_f1.png` compares macro F1 and per-class F1 with class support for
   every split;
 - `training_curves.png` shows train and validation loss;
 - `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
   unit count, calendar month, and midpoint local solar hour.
-- `joint_prediction_samples.png` shows 20 deterministic test examples with all
-  five NO2 inputs, four transport residuals, the true class and target raster,
-  and the predicted class and raster;
-- `plant_ops_evaluation.png` compares seasonal and vision per-class F1 on the
-  pooled operations cohort.
+- `joint_prediction_samples.png` shows 20 deterministic, class-balanced test
+  examples ordered from strongest NOx decrease to strongest increase. It includes
+  all five NO2 inputs, four transport residuals, the true class, and both true
+  and predicted contribution channels.
 
-The result email attaches all five figures. Test and operations plots describe
-fixed checkpoints and do not participate in model selection.
+The result email attaches all four figures. Test plots describe fixed
+checkpoints and do not participate in model selection.
