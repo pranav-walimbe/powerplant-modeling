@@ -108,8 +108,8 @@ mass even near an AOI edge.
 All classifiers use inverse-frequency class weights computed only from the
 training split. Each class therefore contributes equal total weight to the
 cross-entropy objective. The joint model adds mean absolute error over both
-contribution channels. Its total loss is `CE + lambda * L1`;
-`RASTER_LOSS_LAMBDA` configures `lambda` and defaults to 1.0. Input NO2 and
+contribution channels. Its total loss is `CE + raster_loss_weight * L1`;
+`RASTER_LOSS_WEIGHT` configures this weight and defaults to 1.0. Input NO2 and
 residual-quality rasters remain unchanged. `CONTRIBUTION_SPLAT_SIGMA` controls
 the Gaussian width in `24 x 24` target-grid cells and defaults to 1.5. Set it
 to zero for nearest-cell targets.

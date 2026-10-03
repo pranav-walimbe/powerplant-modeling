@@ -75,7 +75,7 @@ DEFAULT_GRADIENT_CLIP_NORM = 5.0
 DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_SCHEDULER_FACTOR = 0.50
 DEFAULT_EARLY_STOP_PATIENCE = 15
-DEFAULT_RASTER_LOSS_LAMBDA = 1.0
+DEFAULT_RASTER_LOSS_WEIGHT = 1.0
 DEFAULT_CONTRIBUTION_SPLAT_SIGMA = 1.5
 JOINT_PLOT_SAMPLE_COUNT = 20
 
@@ -103,7 +103,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scheduler-patience", type=int, default=DEFAULT_SCHEDULER_PATIENCE)
     parser.add_argument("--scheduler-factor", type=float, default=DEFAULT_SCHEDULER_FACTOR)
     parser.add_argument("--early-stop-patience", type=int, default=DEFAULT_EARLY_STOP_PATIENCE)
-    parser.add_argument("--raster-loss-lambda", type=float, default=DEFAULT_RASTER_LOSS_LAMBDA)
+    parser.add_argument("--raster-loss-weight", type=float, default=DEFAULT_RASTER_LOSS_WEIGHT)
     parser.add_argument("--contribution-splat-sigma", type=float, default=DEFAULT_CONTRIBUTION_SPLAT_SIGMA)
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
@@ -347,7 +347,7 @@ def train_joint_epoch(
     scaler: torch.cuda.amp.GradScaler,
     device: torch.device,
     gradient_clip_norm: float,
-    raster_loss_lambda: float,
+    raster_loss_weight: float,
 ) -> tuple[float, float, float, float]:
     """Train one joint epoch and return total, component, and accuracy metrics."""
     model.train()
@@ -366,7 +366,7 @@ def train_joint_epoch(
             classification_loss = per_record_classification.sum() / classification_weight
             per_record_raster = raster_l1(raster_prediction, contribution_target)
             raster_loss = per_record_raster.mean()
-            loss = classification_loss + raster_loss_lambda * raster_loss
+            loss = classification_loss + raster_loss_weight * raster_loss
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
@@ -378,7 +378,7 @@ def train_joint_epoch(
         correct += int((logits.argmax(dim=1) == target).sum().item())
     classification_epoch_loss = total_classification_loss / total_classification_weight
     raster_epoch_loss = total_raster_loss / len(loader.dataset)
-    total_epoch_loss = classification_epoch_loss + raster_loss_lambda * raster_epoch_loss
+    total_epoch_loss = classification_epoch_loss + raster_loss_weight * raster_epoch_loss
     return total_epoch_loss, classification_epoch_loss, raster_epoch_loss, correct / len(loader.dataset)
 
 
@@ -388,7 +388,7 @@ def val_joint_epoch(
     criterion: nn.CrossEntropyLoss,
     class_weights: torch.Tensor,
     device: torch.device,
-    raster_loss_lambda: float,
+    raster_loss_weight: float,
 ) -> tuple[float, float, float, float, float]:
     """Evaluate both joint tasks and return loss, accuracy, and macro F1 metrics."""
     model.eval()
@@ -426,7 +426,7 @@ def val_joint_epoch(
     )
     classification_epoch_loss = total_classification_loss / total_classification_weight
     raster_epoch_loss = total_raster_loss / len(loader.dataset)
-    total_epoch_loss = classification_epoch_loss + raster_loss_lambda * raster_epoch_loss
+    total_epoch_loss = classification_epoch_loss + raster_loss_weight * raster_epoch_loss
     return (
         total_epoch_loss,
         classification_epoch_loss,
@@ -479,7 +479,7 @@ def fit_joint_model(
             scaler,
             device,
             args.gradient_clip_norm,
-            args.raster_loss_lambda,
+            args.raster_loss_weight,
         )
         validation_total, validation_classification, validation_raster, validation_accuracy, validation_macro_f1 = (
             val_joint_epoch(
@@ -488,7 +488,7 @@ def fit_joint_model(
                 criterion,
                 class_weights,
                 device,
-                args.raster_loss_lambda,
+                args.raster_loss_weight,
             )
         )
         scheduler.step(validation_classification)
@@ -963,7 +963,7 @@ def main() -> None:
             "loss": "weighted_hard_cross_entropy_plus_contribution_raster_l1",
             "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
             "raster_loss": "per_sample_mean_absolute_error_on_contribution_targets",
-            "raster_loss_lambda": args.raster_loss_lambda,
+            "raster_loss_weight": args.raster_loss_weight,
             "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
             "contribution_target": contribution_metadata,
         },
@@ -1011,7 +1011,7 @@ def main() -> None:
         "loss": "weighted_hard_cross_entropy_plus_contribution_raster_l1",
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
         "raster_loss": "per_sample_mean_absolute_error_on_contribution_targets",
-        "raster_loss_lambda": args.raster_loss_lambda,
+        "raster_loss_weight": args.raster_loss_weight,
         "contribution_target": contribution_metadata,
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
         "context_fusion": "scale_and_shift_film_per_timestep",
@@ -1027,7 +1027,7 @@ def main() -> None:
         "loss": "weighted_hard_cross_entropy_plus_contribution_raster_l1",
         "classification_loss": "training_prevalence_weighted_hard_cross_entropy",
         "raster_loss": "per_sample_mean_absolute_error_on_contribution_targets",
-        "raster_loss_lambda": args.raster_loss_lambda,
+        "raster_loss_weight": args.raster_loss_weight,
         "class_weights": class_weights,
         "selection_metric": "validation_macro_f1",
         "selection_tiebreaker": "training_prevalence_weighted_validation_cross_entropy",
