@@ -120,13 +120,14 @@ pairwise pixel-cost matrix. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
 `SINKHORN_ITERATIONS` default to 1.5, 6.0, and 30. The output head starts near
 one unit of total mass across both channels instead of the sigmoid default of
 0.5 per pixel. `CONTRIBUTION_SPLAT_SIGMA` controls target Gaussian width in
-`24 x 24` cells and defaults to 1.5. Set it to zero for nearest-cell targets.
+`24 x 24` cells and defaults to 1.0. Set it to zero for nearest-cell targets.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
 learning-rate scheduler. The maintained launcher uses batch size 128, model
-width 64, head width 48, dropout 0.30, and seed 42. These rules are fixed
-without a parameter-selection run.
+width 64, head width 48, dropout 0.30, learning rate `1e-4`, weight decay
+`1e-3`, early-stopping patience 10, and seed 42. These rules are fixed without
+a parameter-selection run.
 
 Run the production workflow with:
 
