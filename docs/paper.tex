@@ -118,7 +118,7 @@ physics-guided machine learning; remote sensing
     \midrule
     TEMPO & \todo{Complete} & Model input \\
     HRRR & \todo{Complete} & Weather and transport \\
-    CAMPD & \todo{Complete} & Labels and operations events \\
+    CAMPD & \todo{Complete} & Emissions-change labels \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -133,10 +133,6 @@ physics-guided machine learning; remote sensing
 \subsection{Geographically Disjoint Splits}
 % TODO: Describe overlap clustering, split proportions, and frozen test usage.
 % TODO: Report record and AOI counts by split and class.
-
-\subsection{Plant-Operations Evaluation Cohort}
-% TODO: Define start and stop events, matching rules, cohort size, and purpose.
-% TODO: State that this pooled validation/test cohort is a diagnostic evaluation.
 
 \section{Methods}
 \label{sec:methods}
@@ -215,18 +211,11 @@ classification, and auxiliary-raster paths.}
 \subsection{Performance by AOI and Observation Conditions}
 % TODO: Stratify results by plant characteristics, month, solar hour, and quality.
 
-\subsection{Plant-Operations Evaluation}
-% TODO: Report per-class F1 for seasonal and vision models.
-% TODO: Discuss cohort composition and AOI-clustered uncertainty.
-
-\figureplaceholder{plant-operations-f1}{Seasonal and vision per-class F1 on the
-plant-operations evaluation cohort.}
-
 \section{Discussion}
 \label{sec:discussion}
 
 % TODO: Interpret where imagery adds information beyond seasonal context.
-% TODO: Discuss transport assumptions and errors on operations-linked records.
+% TODO: Discuss transport assumptions and class-specific errors.
 % TODO: Separate supported conclusions from hypotheses for future experiments.
 
 \section{Limitations}

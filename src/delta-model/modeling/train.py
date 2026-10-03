@@ -38,7 +38,6 @@ from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import (
     plot_accuracy_by_characteristic,
     plot_joint_prediction_samples,
-    plot_ops_evaluation,
     plot_split_class_f1,
     plot_training_curves,
 )
@@ -56,7 +55,6 @@ from config import (
     MODEL_MASK_KEYS,
     MODEL_TARGET_COL,
     NUM_CORES,
-    OPS_DATASET_CSV,
     PRETRAINED_MASKED_MODEL_WEIGHTS,
     RUNS_DIR,
     SEQUENCE_TIMESTEPS,
@@ -112,7 +110,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-smoothing-sigma", type=float, default=DEFAULT_TARGET_SMOOTHING_SIGMA)
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
-    parser.add_argument("--ops-manifest-path", default=OPS_DATASET_CSV)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     return parser.parse_args()
 
@@ -1048,14 +1045,6 @@ def main() -> None:
     histories: dict[str, tuple[list[float], list[float]]] = {}
     model_frames: dict[str, dict[str, pd.DataFrame]] = {}
     training_summaries: dict[str, dict[str, object]] = {}
-    ops_seasonal_dataset = NOxDataset(
-        "ops",
-        stats,
-        manifest_path=args.ops_manifest_path,
-        load_images=False,
-    )
-    ops_seasonal_loader = _loader(ops_seasonal_dataset, shuffle=False, args=args, device=device)
-    ops_source_splits = sorted(ops_seasonal_dataset.frame["source_split"].astype(str).unique())
 
     seasonal_model = SeasonalMLP(len(MODEL_FEATURE_NAMES)).to(device)
     print(f"Training {seasonal_model.num_params():,}-parameter seasonal classifier on {device}")
@@ -1081,8 +1070,6 @@ def main() -> None:
     for split, loader in seasonal_eval_loaders.items():
         logits, probabilities, indices, _ = run_inference(seasonal_model, loader, device)
         seasonal_frames[split] = _prediction_frame(seasonal_datasets[split], logits, probabilities, indices)
-    logits, probabilities, indices, _ = run_inference(seasonal_model, ops_seasonal_loader, device)
-    seasonal_frames["ops"] = _prediction_frame(ops_seasonal_dataset, logits, probabilities, indices)
     training_summaries["seasonal"] = {
         "maximum_epochs": args.seasonal_epochs,
         "learning_rate": args.seasonal_learning_rate,
@@ -1093,7 +1080,6 @@ def main() -> None:
     histories["seasonal"] = (seasonal_train_losses, seasonal_val_losses)
     model_frames["seasonal"] = seasonal_frames
     del seasonal_model, seasonal_train_loader, seasonal_eval_loaders, seasonal_datasets
-    del ops_seasonal_dataset, ops_seasonal_loader
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -1168,18 +1154,6 @@ def main() -> None:
             shuffled_probabilities,
             shuffled_indices,
         )
-    ops_vision_dataset = NOxDataset(
-        "ops",
-        stats,
-        manifest_path=args.ops_manifest_path,
-        completed_raster_paths=completed_paths,
-        source_image_stats=masked_image_stats,
-        transport_transform=transport_transform,
-        per_timestep_context=True,
-    )
-    ops_vision_loader = _loader(ops_vision_dataset, shuffle=False, args=args, device=device)
-    logits, probabilities, indices, _ = run_inference(vision_model, ops_vision_loader, device)
-    vision_frames["ops"] = _prediction_frame(ops_vision_dataset, logits, probabilities, indices)
     histories["vision"] = (vision_train_losses, vision_validation_losses)
     model_frames["vision"] = vision_frames
     training_summaries["vision"] = {
@@ -1201,7 +1175,7 @@ def main() -> None:
         "context_fusion": "scale_and_shift_film_per_timestep",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
     }
-    del vision_model, vision_train_loader, ops_vision_dataset, ops_vision_loader
+    del vision_model, vision_train_loader
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -1239,8 +1213,6 @@ def main() -> None:
         "pretrained_masked_model_role": "missing_pixel_completion_only",
         "encoder_initialization": "random",
         "completed_raster_paths": {split: str(path) for split, path in completed_paths.items()},
-        "ops_manifest_path": str(args.ops_manifest_path),
-        "ops_source_splits": ops_source_splits,
         "delta_target_paths": {split: str(path) for split, path in delta_target_paths.items()},
         "completed_raster_keys": list(MODEL_IMAGE_KEYS + MODEL_MASK_KEYS),
         "image_keys": list(stats.image_keys),
@@ -1299,7 +1271,6 @@ def main() -> None:
     plot_training_curves(histories, run_dir)
     plot_accuracy_by_characteristic(model_frames, run_dir)
     plot_joint_prediction_samples(*joint_sample_arrays, run_dir=run_dir)
-    plot_ops_evaluation(model_frames, run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")
 
 

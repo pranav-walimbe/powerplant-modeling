@@ -11,7 +11,6 @@ from matplotlib.axes import Axes
 from matplotlib.container import BarContainer
 from modeling.dataset import FINAL_TIMESTEP_TIME_COLUMN, midpoint_local_solar_hour
 from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classification_metrics
-from sklearn.metrics import f1_score
 
 from config import MODEL_CLASS_NAMES
 
@@ -125,51 +124,6 @@ def plot_split_class_f1(
     figure.suptitle("Macro and per-class F1 by split and model", fontsize=16)
     figure.tight_layout()
     _save(figure, run_dir, "split_class_f1")
-
-
-def plot_ops_evaluation(
-    model_frames: dict[str, dict[str, pd.DataFrame]],
-    run_dir: str | Path,
-) -> None:
-    """Plot seasonal and vision per-class F1 on plant-operation records.
-
-    Args:
-        model_frames: Row-level predictions by model and evaluation scope.
-        run_dir: Model-run output directory.
-    """
-    sns.set_theme(style="whitegrid", font_scale=1.0)
-    models = _available_models(model_frames)
-    class_positions = np.arange(len(MODEL_CLASS_NAMES), dtype=np.float64)
-    model_width = 0.8 / len(models)
-    model_offsets = (np.arange(len(models)) - (len(models) - 1) / 2) * model_width
-    figure, axis = plt.subplots(figsize=(9, 6))
-    for model_name, offset in zip(models, model_offsets, strict=True):
-        frame = model_frames[model_name]["ops"]
-        scores = f1_score(
-            frame[TRUE_CLASS_COL],
-            frame[PREDICTED_CLASS_COL],
-            labels=np.arange(len(MODEL_CLASS_NAMES)),
-            average=None,
-            zero_division=0,
-        )
-        bars = axis.bar(
-            class_positions + offset,
-            scores,
-            width=model_width,
-            color=MODEL_COLORS[model_name],
-            label=MODEL_DISPLAY_NAMES[model_name],
-        )
-        _label_bars(axis, bars)
-    axis.set(
-        title="Plant-operations per-class F1",
-        ylabel="F1 score",
-        xticks=class_positions,
-        xticklabels=[name.title() for name in MODEL_CLASS_NAMES],
-        ylim=(0, 1.08),
-    )
-    axis.legend()
-    figure.tight_layout()
-    _save(figure, run_dir, "plant_ops_evaluation")
 
 
 def plot_training_curves(
