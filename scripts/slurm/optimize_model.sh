@@ -36,7 +36,21 @@ if [[ ! -w "${node_work_dir}" ]]; then
 fi
 node_dataframe_dir="${node_work_dir}/dataframes"
 echo "Staging split metadata into ${node_dataframe_dir}"
-cp -a "${shared_dataset_dir}/dataframes" "${node_dataframe_dir}"
+staging_succeeded=false
+for attempt in 1 2 3; do
+    staging_dir="${node_work_dir}/dataframes-stage-${attempt}"
+    echo "Dataset staging attempt ${attempt}/3 on ${HOSTNAME}"
+    if cp -a "${shared_dataset_dir}/dataframes" "${staging_dir}"; then
+        mv "${staging_dir}" "${node_dataframe_dir}"
+        staging_succeeded=true
+        break
+    fi
+    sleep 10
+done
+if [[ "${staging_succeeded}" != true ]]; then
+    echo "Could not stage split metadata from shared storage on ${HOSTNAME}" >&2
+    exit 1
+fi
 export NO2_DATASET_DF="${node_dataframe_dir}"
 df -h "${node_work_dir}"
 
