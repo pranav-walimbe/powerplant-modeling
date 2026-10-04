@@ -117,7 +117,7 @@ weight and defaults to 1.0.
 
 Sinkhorn scaling uses a separable Gaussian kernel in float32, avoiding a dense
 pairwise pixel-cost matrix. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
-`SINKHORN_ITERATIONS` default to 1.5, 6.0, and 30. The output head starts near
+`SINKHORN_ITERATIONS` default to 1.0, 6.0, and 30. The output head starts near
 one unit of total mass across both channels instead of the sigmoid default of
 0.5 per pixel. `CONTRIBUTION_SPLAT_SIGMA` controls target Gaussian width in
 `24 x 24` cells and defaults to 1.0. Set it to zero for nearest-cell targets.
@@ -125,9 +125,12 @@ one unit of total mass across both channels instead of the sigmoid default of
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
 learning-rate scheduler. The maintained launcher uses batch size 128, model
-width 64, head width 48, dropout 0.30, learning rate `1e-4`, weight decay
-`1e-3`, early-stopping patience 10, and seed 42. These rules are fixed without
-a parameter-selection run.
+width 64, head width 48, dropout 0.20, learning rate
+`6.0378112892784365e-5`, weight decay `1e-4`, early-stopping patience 10, and
+seed 42. The learning rate, weight decay, dropout, raster-loss weight,
+contribution splat sigma, Sinkhorn blur, and Sinkhorn reach come from trial 22
+of the validation-only hyperparameter study, which achieved validation macro
+F1 0.6225.
 
 Run the production workflow with:
 
