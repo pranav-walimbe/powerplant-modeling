@@ -1,0 +1,129 @@
+\documentclass[sigconf,nonacm]{acmart}
+
+\newcommand{\NOx}{NO$_x$}
+\newcommand{\modelname}{PlumeWatch}
+
+\title{Detecting Power Plant \texorpdfstring{\NOx}{NOx} Emissions Changes using
+Physics-Guided Deep Learning and TEMPO Satellite Imagery}
+
+\author{Pranav Walimbe}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \city{Berkeley}
+  \state{California}
+  \country{USA}
+}
+\email{pranav.walimbe@berkeley.edu}
+
+\author{Ron Cohen}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \city{Berkeley}
+  \state{California}
+  \country{USA}
+}
+\email{rcohen@berkeley.edu}
+
+\date{October 3, 2026}
+
+\begin{document}
+
+\begin{abstract}
+NASA's geostationary Tropospheric Emissions: Monitoring of Pollution (TEMPO)
+instrument provides hourly observations of tropospheric nitrogen dioxide
+(NO$_2$) across North America. Reliable satellite-based estimates of power plant nitrogen oxides (\NOx{}) emissions
+from these observations could fill gaps in reported data caused by continuous emissions
+monitoring system (CEMS) failures and provide independent estimates for facilities
+not subject to hourly emissions-reporting requirements. Previous studies have estimated hourly
+point-source \NOx{} emissions using satellite-based empirical methods, such as cross-sectional
+flux and the directional derivative approach. However, these methods struggle to generalize
+across many observations due to varying atmospheric conditions, coarse spatial resolution of
+TEMPO observations, and confounding signals from nearby emitting sources. We formulate the problem
+as change detection over sequences of TEMPO observations, allowing the model to learn plume evolution
+while external confounders are near-constant. Our convolutional recurrent neural network (CRNN) processes
+five consecutive TEMPO observations, High-Resolution Rapid Refresh (HRRR) meteorological fields, and
+physics-guided transport residuals to jointly classify plant emissions as increasing, steady, or decreasing
+and predict class-conditioned spatial contribution rasters. On a held-out evaluation set covering more than
+15,000 emission sequences from over 100 power plants across the United States from August 2023 to July 2026, our model improved
+classification accuracy by X\% over a cross-sectional flux (CSF) baseline and Y\% over a
+seasoanlity-only basline, suggesting our model posseses stronger generalization capabilities
+for detecting changes in power plant emissions behavior.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+
+Based on U.S. Environmental Protection Agency (EPA) inventory data, power plants
+in the U.S. electricity-generation sector emitted approximately 0.74 million
+short tons of \NOx{} in 2023, about 9.5\% of national
+emissions~\cite{epa2026emissionsTrends}. \NOx{} emissions contribute to
+ground-level ozone and secondary particulate matter, pollutants that can
+inflame and damage the airways, reduce lung function, and aggravate
+asthma~\cite{epa2016noxHealth}. EPA regulations require most large U.S.
+fossil-fuel-fired generating units that produce electricity for sale to submit
+unit-level hourly emissions data on a quarterly basis~\cite{epa2026powerMonitoring}.
+However, monitoring equipment malfunctions and maintenance can make CEMS
+measurements unavailable or invalid, requiring plants to report calculated
+substitute values instead of direct measurements~\cite{epa2021substitute}.
+Behind-the-meter generators that do not sell electricity can fall outside
+federal hourly reporting requirements, as illustrated by the natural-gas
+turbines powering SpaceXAI's Colossus 2 data center~\cite{gauld2026dataCenter}.
+Outside the United States, comparable public hourly, unit-level emissions data
+are generally unavailable, even where facilities continuously monitor
+emissions~\cite{huang2026detectability}. Independent estimates could therefore
+fill reporting gaps and reveal short-term changes before the EPA's quarterly release
+of hourly emissions data.
+
+TEMPO is an ultraviolet-visible spectrometer hosted aboard a geostationary satellite
+that observes tropospheric vertical column densities (TVCDs) for various trace gases
+across North America during daylight hours~\cite{zoogman2017tempo}. Earlier polar-orbiting
+instruments, including the Ozone Monitoring Instrument (OMI) and TROPOspheric Monitoring
+Instrument (TROPOMI), typically observe a given location once per day; TEMPO's geostationary
+view provides approximately hourly scans with finer spatial
+resolution~\cite{levelt2006omi,veefkind2012tropomi,zoogman2017tempo}. Hourly sampling
+captures intraday changes in power plant plumes and atmospheric transport that daily
+observations can miss. However, power plant signals in TEMPO NO$_2$ TVCDs can be weakened
+or obscured by factors including evolving meteorology and atmospheric chemistry, cloud cover,
+viewing geometry and retrieval uncertainty, dilution within TEMPO's 2.0-by-4.75 km spatial resolution
+per pixel, and interference from nearby emission sources~\cite{tempo2025userGuide,huang2026detectability,gauld2026dataCenter}.
+Cross-comparisons with CEMS data, which is the most reliable ground truth available, introduce an
+additional temporal mismatch because TEMPO observes a facility at a specific time during each hourly scan,
+whereas CEMS data aggregate emissions over an entire clock hour~\cite{tempo2025userGuide,epa2026powerMonitoring}.
+
+Satellite-based point-source studies typically estimate emissions by relating an
+observed column enhancement to atmospheric transport. The cross-sectional flux
+(CSF) method integrates background-subtracted columns across plume transects and
+multiplies the resulting line density by an effective wind speed, whereas the
+integrated mass enhancement (IME) method converts the total excess plume mass to
+a source rate using an estimated residence time~\cite{meier2024conversion,santaren2025benchmarking}.
+Gaussian plume methods instead fit a parameterized dispersion model to the observed
+enhancement~\cite{santaren2025benchmarking}. Flux divergence and directional
+derivative approaches (DDA) apply mass-conservation relationships to satellite
+column fields and meteorological data without first fitting a plume shape. These
+approaches have been applied to TROPOMI NO$_2$ observations to estimate point-source
+\NOx{} emissions~\cite{meier2024conversion,sun2025hourly}. Sun et al. extended DDA
+with a column-tendency term and used TEMPO observations to derive hourly estimates
+for 14 U.S. power plants~\cite{sun2025hourly}. Machine-learning studies of satellite
+NO$_2$ have used convolutional neural networks to identify TROPOMI plumes and
+classifiers to predict whether power-plant plumes are detectable under given
+meteorological, surface, and viewing conditions~\cite{finch2022automated,huang2026detectability}.
+These studies identify when a plume is visible but do not infer hourly plant
+emissions from sequences of NO$_2$ imagery. For other trace gases, learned methods
+have progressed from plume segmentation to source-rate estimation, including a
+U-Net and CNN pipeline for methane and CNN models trained to estimate power-plant
+CO$_2$ emissions from simulated satellite scenes~\cite{bruno2024uplume,dumont2024deepLearning}.
+
+
+% <Paragraph 4: Define the unresolved problem and motivate change detection.
+% Explain why learning increase, steady, and decrease classes from short raster
+% sequences may be more robust than estimating an absolute flux from each scan.>
+
+% <Paragraph 5: Briefly introduce the proposed physics-guided learning approach
+% and state the paper's contributions. Leave data processing, architecture,
+% training, baselines, and evaluation details to their later sections.>
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}
