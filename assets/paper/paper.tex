@@ -46,9 +46,8 @@ capture plume evolution while reducing sensitivity to persistent background
 levels and biases in absolute column values. We develop a physics-guided
 convolutional gated recurrent unit model (ConvGRU) that processes five consecutive
 TEMPO observations, High-Resolution Rapid Refresh (HRRR) meteorological fields,
-and transport residuals. The network jointly classifies the target power plant's
-emissions as increasing, steady, or decreasing and predicts a spatial map of
-contributions from emitting facilities within the observed scene. On a held-out
+and transport residuals. The network classifies the target power plant's
+emissions as increasing, steady, or decreasing. On a held-out
 evaluation set containing more than 20,000 samples from over 95 U.S. power
 plants observed between August 2023 and July 2026, the model achieves a
 classification macro-F1 score of 0.54, which outperformed a baseline MLP (0.49).
@@ -141,8 +140,7 @@ Our contributions are as follows:
 
     \item We introduce a physics-guided deep learning framework that combines
     sequences of TEMPO NO$_2$ observations with meteorology and transport
-    information. The model jointly predicts emissions behavior and a spatial
-    map of emissions contributions within the observed scene.
+    information to predict emissions behavior.
 
     \item We evaluate the model on held-out power plants across geographic
     regions, seasons, and operating profiles and compare its performance with
@@ -201,14 +199,17 @@ each AOI grid cell an NO$_2$ TVCD by averaging the TEMPO footprints that
 intersect it, weighted by their area of overlap. Figure~\ref{fig:tempoRegridding}
 illustrates this mapping from native footprints to the fixed AOI grid.
 
-\begin{figure}[t]
+\begin{figure*}[!t]
     \centering
-    \fbox{\parbox[c][1.15in][c]{0.91\columnwidth}{\centering
-    Regridding schematic placeholder}}
+    \IfFileExists{visuals/tempo-regridding.pdf}{%
+        \includegraphics[width=\textwidth]{visuals/tempo-regridding.pdf}%
+    }{%
+        \fbox{\parbox[c][1.15in][c]{0.91\textwidth}{\centering
+        Regridding schematic placeholder}}}
     \caption{TEMPO Level 2 regridding to the AOI grid.}
     \Description{TEMPO footprints mapped to the AOI grid.}
     \label{fig:tempoRegridding}
-\end{figure}
+\end{figure*}
 
 A footprint contributes to the NO$_2$ average only when its main data quality
 flag equals zero and its effective cloud fraction does not exceed 0.20. Grid
@@ -246,13 +247,6 @@ $\theta=250~\mathrm{lb\,h^{-1}}$ to assign its category:
     \end{cases}
 \end{equation}
 
-Each sample also includes two $24 \times 24$ spatial contribution targets so
-the model can jointly learn plume attribution. We interpolate each facility's
-emissions to the five scan times and calculate its change using the same early
-and late windows as the class label. For increase samples, we normalize positive
-facility changes and distribute them around the facility locations; decrease
-samples use the normalized magnitudes of negative changes. The unused target is
-an all-zero raster, and steady samples use all-zero rasters for both targets.
 Figure~\ref{fig:sample-construction} summarizes one example sequence.
 
 \begin{figure}[t]
@@ -262,10 +256,10 @@ Figure~\ref{fig:sample-construction} summarizes one example sequence.
   }{%
       \fbox{\parbox[c][1.5in][c]{0.9\columnwidth}{\centering
       \textit{Placeholder: five NO$_2$, temperature, and wind observations;}\\[0.25em]
-      \textit{behavior label and spatial contribution targets}}}
+      \textit{three-class emissions-change label}}}
   }
   \caption{Example five-timestep sample.}
-  \Description{Five-timestep raster inputs and model targets.}
+  \Description{Five-timestep raster inputs and a three-class emissions-change label.}
   \label{fig:sample-construction}
 \end{figure}
 
@@ -360,10 +354,10 @@ the more common change class.
       \textit{Placeholder: ConvGRU architecture}\\[0.35em]
       Raster encoders $\rightarrow$ ConvGRU $\rightarrow$ visual embedding\\
       Temporal features $\rightarrow$ feedforward encoder $\rightarrow$ late fusion
-      $\rightarrow$ classification head; ConvGRU $\rightarrow$ spatial head}}
+      $\rightarrow$ classification head}}
   }
   \caption{ConvGRU architecture.}
-  \Description{ConvGRU encoders, recurrent core, late fusion, and output heads.}
+  \Description{ConvGRU encoders, recurrent core, late fusion, and classification head.}
   \label{fig:convgru-architecture}
 \end{figure*}
 
@@ -386,16 +380,12 @@ learning how much information to preserve or replace across the sequence. This
 design lets the network use both the observed atmospheric state and the portion
 of each change that the transport model does not explain.
 
-The final recurrent feature map feeds two prediction heads. For classification,
-we combine global average and maximum pooling to form a visual embedding. A
+The final recurrent feature map feeds the classification head. We combine
+global average and maximum pooling to form a visual embedding. A
 small feedforward network separately encodes the four temporal features, and its output is
 concatenated with the visual embedding before the classification head produces
 logits for the increase, steady, and decrease classes. This late-fusion design
 keeps the tabular context separate while the ConvGRU learns the raster sequence.
-The spatial head upsamples the recurrent feature map into two $24 \times 24$
-contribution rasters representing increases and decreases. Sharing the recurrent
-representation allows the model to learn emissions behavior and spatial
-attribution jointly.
 
 \subsection{Temporal MLP}
 
@@ -455,17 +445,16 @@ statistics unchanged to the validation and test splits.
     \toprule
     Parameter & Baseline MLP & ConvGRU \\
     \midrule
-    Trainable parameters & 291 & 865,805 \\
+    Trainable parameters & 291 & 724,939 \\
     Optimizer & \multicolumn{2}{c}{AdamW} \\
     Batch size & 128 & 128 \\
-    Initial learning rate & $10^{-3}$ & $10^{-4}$ \\
-    Weight decay & $10^{-3}$ & $10^{-3}$ \\
-    Dropout & -- & 0.30 \\
-    Spatial-loss weight $\lambda_{\mathrm{sp}}$ & -- & 1.0 \\
+    Initial learning rate & $10^{-3}$ & $6.04 \times 10^{-5}$ \\
+    Weight decay & $10^{-4}$ & $10^{-4}$ \\
+    Dropout & -- & 0.20 \\
     Gradient-norm limit & \multicolumn{2}{c}{5.0} \\
     LR scheduler & \multicolumn{2}{c}{Reduce on plateau} \\
     LR reduction factor & \multicolumn{2}{c}{0.5} \\
-    Scheduler patience & \multicolumn{2}{c}{10 epochs} \\
+    Scheduler patience & \multicolumn{2}{c}{5 epochs} \\
     Selection metric & \multicolumn{2}{c}{Validation macro-F1} \\
     Early-stopping patience & \multicolumn{2}{c}{10 epochs} \\
     Hardware & \multicolumn{2}{c}{1 NVIDIA RTX A5000 GPU} \\
@@ -474,16 +463,7 @@ statistics unchanged to the validation and test splits.
 \end{table}
 
 Both classifiers use inverse-frequency class weights computed from the final
-training split. The temporal MLP minimizes weighted cross-entropy. For the
-ConvGRU, we combine this classification objective with a debiased unbalanced
-Sinkhorn divergence between the predicted and target contribution rasters:
-\begin{equation}
-    \mathcal{L} = \mathcal{L}_{\mathrm{CE}}
-    + \lambda_{\mathrm{sp}}\mathcal{L}_{\mathrm{sp}},
-\end{equation}
-where $\lambda_{\mathrm{sp}}$ controls the contribution of the spatial task.
-The unbalanced spatial loss penalizes misplaced contribution mass while
-allowing the all-zero targets used by steady samples and inactive channels.
+training split and minimize weighted cross-entropy.
 
 \begin{figure*}[!t]
   \centering
@@ -499,35 +479,11 @@ allowing the all-zero targets used by steady samples and inactive channels.
 
 We evaluate classification using macro-F1 and balanced accuracy to account for
 differences in class prevalence. On the test set, the ConvGRU achieves a
-macro-F1 of 0.540 and balanced accuracy of 0.547, compared with 0.494 and 0.513
+macro-F1 of 0.538 and balanced accuracy of 0.553, compared with 0.494 and 0.513
 for the temporal MLP. As shown in Figure~\ref{fig:classification-performance},
-the improvement is concentrated in the steady class, while performance on
-increase samples is lower for some metrics. Results across the training,
+the ConvGRU improves decrease and steady classification, while its increase
+scores are lower than the temporal MLP's on the test split. Results across the training,
 validation, and test splits show the same aggregate advantage for the ConvGRU.
-
-\subsection{Spatial Attribution Performance}
-
-\begin{figure}[H]
-  \centering
-  \fbox{\parbox[c][1.45in][c]{0.90\columnwidth}{\centering
-  \textit{Placeholder: spatial attribution loss}\\[0.6em]
-  Per-class loss for the training, validation, and test splits.}}
-  \caption{Spatial attribution loss by class and split.}
-  \Description{Spatial attribution loss by class and split.}
-  \label{fig:spatial-attribution-loss}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \fbox{\parbox[c][1.75in][c]{0.90\columnwidth}{\centering
-  \textit{Placeholder: representative spatial attribution predictions}\\[0.6em]
-  Two low-loss test samples and two high-loss test samples, each showing the
-  target and predicted contribution rasters on a shared color scale.}}
-  \caption{Representative spatial attribution predictions.}
-  \Description{Target and predicted rasters for two low-loss and two high-loss
-  samples.}
-  \label{fig:spatial-attribution-examples}
-\end{figure}
 
 \subsection{Performance Across Evaluation Strata}
 
