@@ -33,7 +33,6 @@ from config import (
 RASTER_PATH_COL = "raster_bundle_path"
 NO2_CHANNEL = MODEL_IMAGE_KEYS.index("no2")
 MIN_SCALE = 1e-12
-NO2_ASINH_SCALE_MOLECULES_PER_CM2 = 1.0e15
 DEGREES_PER_SOLAR_HOUR = 15.0
 SECONDS_PER_DAY = 86_400.0
 TIMESTEP_TIME_COLUMNS = tuple(f"t{index}_timestamp" for index in range(SEQUENCE_TIMESTEPS))
@@ -247,8 +246,6 @@ class NormalizationStats:
     feature_std: tuple[float, ...]
     target_name: str
     training_records: int
-    no2_normalization: str = "zscore"
-    no2_asinh_scale: float = NO2_ASINH_SCALE_MOLECULES_PER_CM2
 
     def to_dict(self) -> dict[str, object]:
         """Return the normalization state as JSON-safe values.
@@ -278,8 +275,6 @@ class NormalizationStats:
             feature_std=tuple(float(value) for value in values["feature_std"]),
             target_name=str(values.get("target_name", MODEL_TARGET_COL)),
             training_records=int(values["training_records"]),
-            no2_normalization=str(values.get("no2_normalization", "zscore")),
-            no2_asinh_scale=float(values.get("no2_asinh_scale", NO2_ASINH_SCALE_MOLECULES_PER_CM2)),
         )
 
 
@@ -378,38 +373,6 @@ def _valid_channel_values(rasters: np.ndarray, channel: int) -> np.ndarray:
     return rasters[:, channel][_channel_valid_mask(rasters, channel)]
 
 
-def transform_no2(values: np.ndarray, method: str, asinh_scale: float) -> np.ndarray:
-    """Transform physical NO2 values before centering and scaling.
-
-    Args:
-        values: NO2 columns in molecules per square centimetre.
-        method: Configured NO2 normalization strategy.
-        asinh_scale: Physical scale used by the signed asinh transform.
-
-    Returns:
-        Values in the space where normalization moments are fitted.
-    """
-    if method == "signed_asinh_zscore":
-        return np.arcsinh(values / asinh_scale)
-    return values
-
-
-def inverse_transform_no2(values: np.ndarray, method: str, asinh_scale: float) -> np.ndarray:
-    """Restore transformed NO2 values to physical units.
-
-    Args:
-        values: NO2 values before centering and scaling.
-        method: Configured NO2 normalization strategy.
-        asinh_scale: Physical scale used by the signed asinh transform.
-
-    Returns:
-        NO2 columns in molecules per square centimetre.
-    """
-    if method == "signed_asinh_zscore":
-        return np.sinh(values) * asinh_scale
-    return values
-
-
 def _update_moments(
     values: np.ndarray,
     count: int,
@@ -497,8 +460,6 @@ def compute_stats(
         feature_std=tuple(float(value) for value in feature_std),
         target_name=MODEL_TARGET_COL,
         training_records=len(frame),
-        no2_normalization="zscore",
-        no2_asinh_scale=NO2_ASINH_SCALE_MOLECULES_PER_CM2,
     )
 
 
@@ -530,8 +491,6 @@ def clipped_pixel_fractions(
         rasters = _load_rasters(_raster_path(serialized_path, root))
         for channel in range(len(MODEL_IMAGE_KEYS)):
             values = _valid_channel_values(rasters, channel)
-            if channel == NO2_CHANNEL:
-                values = transform_no2(values, stats.no2_normalization, stats.no2_asinh_scale)
             normalized = (values - center[channel]) / scale[channel]
             clipped[channel] += np.count_nonzero(np.abs(normalized) > MODEL_IMAGE_CLIP_ABS)
             valid[channel] += values.size
@@ -600,11 +559,7 @@ class NOxDataset(Dataset):
         source_stats = source_image_stats or self.stats.to_dict()
         self.source_image_center = np.asarray(source_stats["image_center"], dtype=np.float32)
         self.source_image_scale = np.asarray(source_stats["image_scale"], dtype=np.float32)
-        self.source_no2_normalization = str(source_stats.get("no2_normalization", "robust"))
-        self.source_no2_asinh_scale = float(
-            source_stats.get("no2_asinh_scale", NO2_ASINH_SCALE_MOLECULES_PER_CM2)
-        )
-        self.no2_normalization = np.broadcast_to(
+        self.no2_center_scale = np.broadcast_to(
             np.asarray(
                 (self.image_center[NO2_CHANNEL], self.image_scale[NO2_CHANNEL]),
                 dtype=np.float32,
@@ -640,16 +595,6 @@ class NOxDataset(Dataset):
         source_center = self.source_image_center[None, :, None, None]
         source_scale = self.source_image_scale[None, :, None, None]
         physical = numeric * source_scale + source_center
-        physical[:, NO2_CHANNEL] = inverse_transform_no2(
-            physical[:, NO2_CHANNEL],
-            self.source_no2_normalization,
-            self.source_no2_asinh_scale,
-        )
-        physical[:, NO2_CHANNEL] = transform_no2(
-            physical[:, NO2_CHANNEL],
-            self.stats.no2_normalization,
-            self.stats.no2_asinh_scale,
-        )
         center = self.image_center[None, :, None, None]
         scale = self.image_scale[None, :, None, None]
         numeric[:] = (physical - center) / scale
@@ -670,12 +615,6 @@ class NOxDataset(Dataset):
                 for channel in range(len(MODEL_IMAGE_KEYS)):
                     channel_valid = _channel_valid_mask(rasters, channel)
                     channel_values = rasters[:, channel][channel_valid]
-                    if channel == NO2_CHANNEL:
-                        channel_values = transform_no2(
-                            channel_values,
-                            self.source_no2_normalization,
-                            self.source_no2_asinh_scale,
-                        )
                     normalized_channel = normalized[:, channel]
                     normalized_channel[channel_valid] = (
                         channel_values - self.source_image_center[channel]
@@ -687,11 +626,11 @@ class NOxDataset(Dataset):
         transport = torch.empty(0, dtype=torch.float32)
         if self.transport_transform is not None:
             elapsed_hours = torch.from_numpy(self.elapsed_hours[index]).unsqueeze(0)
-            no2_normalization = torch.from_numpy(self.no2_normalization[index]).unsqueeze(0)
+            no2_center_scale = torch.from_numpy(self.no2_center_scale[index]).unsqueeze(0)
             residual, quality = self.transport_transform(
                 image.unsqueeze(0),
                 elapsed_hours,
-                no2_normalization,
+                no2_center_scale,
             )
             transport = torch.cat((residual, quality), dim=2).squeeze(0)
         item = (

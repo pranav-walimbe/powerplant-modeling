@@ -378,8 +378,6 @@ def _fit_transport_residual_stats(
     transport = TransportTransform(
         stats.image_center,
         stats.image_scale,
-        no2_normalization=stats.no2_normalization,
-        no2_asinh_scale=stats.no2_asinh_scale,
         config=config,
     )
     total_weight = 0.0
@@ -390,8 +388,8 @@ def _fit_transport_residual_stats(
             image, _, _, _, indices = batch
             source_indices = indices.numpy()
             elapsed_hours = torch.from_numpy(loader.dataset.elapsed_hours[source_indices])
-            no2_normalization = torch.from_numpy(loader.dataset.no2_normalization[source_indices])
-            residual, quality = transport.physical_residual(image, elapsed_hours, no2_normalization)
+            no2_center_scale = torch.from_numpy(loader.dataset.no2_center_scale[source_indices])
+            residual, quality = transport.physical_residual(image, elapsed_hours, no2_center_scale)
             weights = quality.double()
             residual = residual.double()
             total_weight += weights.sum().item()
@@ -554,8 +552,6 @@ def main() -> None:
         stats.image_scale,
         residual_center=transport_residual_stats["center"],
         residual_scale=transport_residual_stats["scale"],
-        no2_normalization=stats.no2_normalization,
-        no2_asinh_scale=stats.no2_asinh_scale,
         config=transport_config,
     )
     transport_datasets = {
@@ -586,7 +582,7 @@ def main() -> None:
         "class_names": MODEL_CLASS_NAMES,
         "sequence_timesteps": SEQUENCE_TIMESTEPS,
         "pretrained_masked_model_sha256": masked_checkpoint_sha256,
-        "no2_normalization": stats.no2_normalization,
+        "raster_normalization": "training_split_zscore",
         "loss": "training_prevalence_weighted_hard_cross_entropy",
         "class_weights": class_weights,
         "selection_metric": "validation_macro_f1",
@@ -743,10 +739,7 @@ def main() -> None:
         "quality_keys": ["no2_mask", "transport_residual_quality"],
         "image_center": list(stats.image_center),
         "image_scale": list(stats.image_scale),
-        "raster_normalization": "global_training_split_statistics",
-        "no2_normalization": stats.no2_normalization,
-        "no2_asinh_scale_molecules_per_cm2": stats.no2_asinh_scale,
-        "weather_normalization": "training_split_mean_standard_deviation",
+        "raster_normalization": "training_split_zscore",
         "image_clip_range": [-MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS],
         "target_name": MODEL_TARGET_COL,
         "class_names": list(MODEL_CLASS_NAMES),
