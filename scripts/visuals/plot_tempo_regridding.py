@@ -1,137 +1,77 @@
-"""Generate the TEMPO footprint-to-grid schematic used as paper Figure 1."""
+"""Generate the real TEMPO footprint-to-grid transformation used as paper Figure 1."""
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import shapely
 from matplotlib import colors
-from matplotlib.patches import Patch
-from matplotlib.patches import Polygon as PolygonPatch
-from shapely.geometry import Polygon, box
+from matplotlib.collections import PolyCollection
+from preprocessing.regrid import (
+    GOOD_QUALITY_FLAG,
+    AoiGrid,
+    GranulePixels,
+    build_granule_spatial_index,
+    read_granule_pixels,
+    regrid_aoi_raster,
+)
+from preprocessing.stratify_utils import WGS84_TO_CONUS
+
+from config import IMG_RANGE, MIN_PIXEL_CLOUD, TEMPO_DIR
 
 plt.switch_backend("Agg")
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
 OUTPUT_STEM = OUTPUT_DIR / "tempo-regridding"
 
-AOI_HALF_WIDTH_KM = 36.0
-GRID_SIZE = 24
-GRID_CELL_KM = 3.0
-PLANT_X_KM = -13.0
-PLANT_Y_KM = -8.0
-WIND_ANGLE_DEGREES = 22.0
+EXAMPLE_AOI_ID = 9
+EXAMPLE_LONGITUDE = -106.375
+EXAMPLE_LATITUDE = 31.7569
+EXAMPLE_GRANULE = Path("2023/08/TEMPO_NO2_L2_V04_20230804T160722Z_S004G08.nc")
+NO2_SCALE = 1.0e15
 
 
-@dataclass(frozen=True)
-class Footprint:
-    """One illustrative TEMPO footprint and its retrieval state."""
-
-    polygon: Polygon
-    no2_column: float
-    is_valid: bool
-
-
-def _plume_column(x_km: float, y_km: float) -> float:
-    # Create a smooth downwind enhancement over a regional background
-    angle = np.deg2rad(WIND_ANGLE_DEGREES)
-    relative_x = x_km - PLANT_X_KM
-    relative_y = y_km - PLANT_Y_KM
-    downwind = relative_x * np.cos(angle) + relative_y * np.sin(angle)
-    crosswind = -relative_x * np.sin(angle) + relative_y * np.cos(angle)
-    plume = 5.6 * np.exp(-0.5 * ((downwind - 13.0) / 15.0) ** 2 - 0.5 * (crosswind / 5.0) ** 2)
-    plume *= 1.0 / (1.0 + np.exp(-downwind / 2.0))
-    source = 2.2 * np.exp(-0.5 * (relative_x / 3.4) ** 2 - 0.5 * (relative_y / 3.4) ** 2)
-    regional = 0.35 * np.cos((x_km + y_km) / 18.0)
-    return 2.2 + regional + plume + source
+def _load_example() -> tuple[AoiGrid, GranulePixels, np.ndarray]:
+    # Reproduce the selected real scan with the production regridding path
+    grid = AoiGrid.from_lon_lat(EXAMPLE_AOI_ID, EXAMPLE_LONGITUDE, EXAMPLE_LATITUDE)
+    pixels = read_granule_pixels(str(Path(TEMPO_DIR) / EXAMPLE_GRANULE))
+    selected = build_granule_spatial_index(pixels).select_grid(grid)
+    raster = regrid_aoi_raster(selected, grid)
+    return grid, selected, raster.no2
 
 
-def _native_footprints() -> list[Footprint]:
-    # Tile the AOI with skewed quadrilaterals that resemble native scan footprints
-    rng = np.random.default_rng(42)
-    footprints = []
-    y_centers = np.arange(-37.0, 38.0, 3.0)
-    x_centers = np.arange(-38.0, 39.0, 5.0)
-    for row_index, y_center in enumerate(y_centers):
-        row_offset = 1.1 * np.sin(row_index * 0.65)
-        for x_center in x_centers + row_offset:
-            center_jitter = rng.normal(0.0, 0.22, size=2)
-            center_x = x_center + center_jitter[0]
-            center_y = y_center + center_jitter[1]
-            half_width = 2.8 + rng.normal(0.0, 0.12)
-            half_height = 1.72 + rng.normal(0.0, 0.08)
-            skew = 0.60 + rng.normal(0.0, 0.08)
-            polygon = Polygon(
-                [
-                    (center_x - half_width - skew, center_y - half_height),
-                    (center_x + half_width - skew, center_y - half_height),
-                    (center_x + half_width + skew, center_y + half_height),
-                    (center_x - half_width + skew, center_y + half_height),
-                ]
-            )
-            cloud_rejected = ((center_x + 20.0) / 10.0) ** 2 + ((center_y - 20.0) / 8.0) ** 2 < 1.0
-            quality_rejected = rng.random() < 0.025
-            footprints.append(
-                Footprint(
-                    polygon=polygon,
-                    no2_column=_plume_column(center_x, center_y) + rng.normal(0.0, 0.12),
-                    is_valid=not (cloud_rejected or quality_rejected),
-                )
-            )
-    return footprints
-
-
-def _area_weighted_grid(footprints: list[Footprint]) -> tuple[np.ndarray, np.ndarray]:
-    # Average accepted footprint values by their overlap with each target cell
-    edges = np.linspace(-AOI_HALF_WIDTH_KM, AOI_HALF_WIDTH_KM, GRID_SIZE + 1)
-    gridded = np.full((GRID_SIZE, GRID_SIZE), np.nan, dtype=np.float64)
-    for row in range(GRID_SIZE):
-        for column in range(GRID_SIZE):
-            cell = box(edges[column], edges[row], edges[column + 1], edges[row + 1])
-            weighted_total = 0.0
-            overlap_total = 0.0
-            for footprint in footprints:
-                if not footprint.is_valid or not cell.intersects(footprint.polygon):
-                    continue
-                overlap_area = cell.intersection(footprint.polygon).area
-                weighted_total += overlap_area * footprint.no2_column
-                overlap_total += overlap_area
-            if overlap_total > 0.0:
-                gridded[row, column] = weighted_total / overlap_total
-    return edges, gridded
-
-
-def _plot_source(axis: plt.Axes) -> None:
-    # Mark the source location consistently in both panels
-    axis.scatter(
-        PLANT_X_KM,
-        PLANT_Y_KM,
-        marker="*",
-        s=75,
-        color="#202020",
-        edgecolor="white",
-        linewidth=0.55,
-        zorder=8,
+def _project_footprints(grid: AoiGrid, pixels: GranulePixels) -> tuple[np.ndarray, np.ndarray]:
+    # Express native footprint corners as kilometres from the grid centre
+    corner_x, corner_y = WGS84_TO_CONUS.transform(pixels.corner_longitudes, pixels.corner_latitudes)
+    vertices = np.stack(
+        (
+            (corner_x - grid.x_m) / 1000.0,
+            (corner_y - grid.y_m) / 1000.0,
+        ),
+        axis=2,
     )
-    axis.annotate(
-        "power plant",
-        (PLANT_X_KM, PLANT_Y_KM),
-        xytext=(-27.0, -16.0),
-        fontsize=6.5,
-        arrowprops={"arrowstyle": "-", "color": "#404040", "linewidth": 0.7},
-        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 1.0},
-        zorder=9,
+    polygons = shapely.polygons(np.stack((corner_x, corner_y), axis=2))
+    accepted = (
+        shapely.is_valid(polygons)
+        & (shapely.area(polygons) > 0)
+        & (pixels.quality_flags == GOOD_QUALITY_FLAG)
+        & (pixels.cloud_fractions <= MIN_PIXEL_CLOUD)
+        & np.isfinite(pixels.values)
     )
+    return vertices, accepted
+
+
 def _format_map_axis(axis: plt.Axes, *, show_y_label: bool) -> None:
-    # Use identical map limits and restrained axes in both panels
+    # Keep both panels in the same physical coordinate frame
+    half_extent = IMG_RANGE / 2
     axis.set(
-        xlim=(-AOI_HALF_WIDTH_KM, AOI_HALF_WIDTH_KM),
-        ylim=(-AOI_HALF_WIDTH_KM, AOI_HALF_WIDTH_KM),
+        xlim=(-half_extent, half_extent),
+        ylim=(-half_extent, half_extent),
         aspect="equal",
-        xticks=(-36, 0, 36),
-        yticks=(-36, 0, 36),
+        xticks=(-half_extent, 0, half_extent),
+        yticks=(-half_extent, 0, half_extent),
+        xlabel="East-west distance (km)",
     )
     if show_y_label:
         axis.set_ylabel("North-south distance (km)")
@@ -140,7 +80,7 @@ def _format_map_axis(axis: plt.Axes, *, show_y_label: bool) -> None:
 
 
 def main() -> None:
-    """Generate PDF and PNG versions of the regridding schematic."""
+    """Generate PDF and PNG versions of the real-data regridding figure."""
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -151,18 +91,21 @@ def main() -> None:
             "ps.fonttype": 42,
         }
     )
-    footprints = _native_footprints()
-    edges, gridded = _area_weighted_grid(footprints)
-    valid_values = np.asarray([footprint.no2_column for footprint in footprints if footprint.is_valid])
-    normalization = colors.Normalize(vmin=np.percentile(valid_values, 3), vmax=np.percentile(valid_values, 98))
+    grid, pixels, gridded = _load_example()
+    vertices, accepted = _project_footprints(grid, pixels)
+    accepted_values = pixels.values[accepted] / NO2_SCALE
+    normalization = colors.Normalize(
+        vmin=float(np.percentile(accepted_values, 2)),
+        vmax=float(np.percentile(accepted_values, 98)),
+    )
     color_map = plt.colormaps["viridis"]
 
-    figure = plt.figure(figsize=(7.15, 3.35))
+    figure = plt.figure(figsize=(6.0, 2.90))
     layout = figure.add_gridspec(
         3,
         3,
-        width_ratios=(1.0, 0.30, 1.0),
-        height_ratios=(1.0, 0.14, 0.06),
+        width_ratios=(1.0, 0.24, 1.0),
+        height_ratios=(1.0, 0.18, 0.06),
         hspace=0.08,
         wspace=0.10,
     )
@@ -171,74 +114,56 @@ def main() -> None:
     grid_axis = figure.add_subplot(layout[0, 2])
     colorbar_axis = figure.add_subplot(layout[2, :])
 
-    for footprint in footprints:
-        if footprint.is_valid:
-            face_color = color_map(normalization(footprint.no2_column))
-            hatch = None
-        else:
-            face_color = "#D9D9D9"
-            hatch = "////"
-        native_axis.add_patch(
-            PolygonPatch(
-                np.asarray(footprint.polygon.exterior.coords),
-                facecolor=face_color,
-                edgecolor="white" if footprint.is_valid else "#7F7F7F",
-                linewidth=0.28,
-                hatch=hatch,
-            )
+    face_colors = np.tile(colors.to_rgba("#D9D9D9"), (len(vertices), 1))
+    face_colors[accepted] = color_map(normalization(accepted_values))
+    native_axis.add_collection(
+        PolyCollection(
+            vertices,
+            facecolors=face_colors,
+            edgecolors=np.where(
+                accepted[:, None],
+                colors.to_rgba("white"),
+                colors.to_rgba("#7F7F7F"),
+            ),
+            linewidths=0.20,
+            rasterized=True,
         )
-    for edge in edges:
-        native_axis.axvline(edge, color="white", linewidth=0.28, alpha=0.45, zorder=6)
-        native_axis.axhline(edge, color="white", linewidth=0.28, alpha=0.45, zorder=6)
-    native_axis.set_title("(a) Native footprints over the target grid", pad=5)
-    native_axis.legend(
-        handles=[Patch(facecolor="#D9D9D9", edgecolor="#7F7F7F", hatch="////", label="quality rejected")],
-        loc="upper left",
-        frameon=True,
-        framealpha=0.92,
-        fontsize=6.3,
-        handlelength=1.6,
-        borderpad=0.35,
     )
-    native_axis.set_xlabel("East-west distance (km)")
-    _plot_source(native_axis)
+    grid_edges = np.linspace(-IMG_RANGE / 2, IMG_RANGE / 2, grid.size + 1)
+    for edge in grid_edges:
+        native_axis.axvline(edge, color="white", linewidth=0.20, alpha=0.42, zorder=3)
+        native_axis.axhline(edge, color="white", linewidth=0.20, alpha=0.42, zorder=3)
+    native_axis.set_facecolor("#D9D9D9")
+    native_axis.set_title("(a) Native TEMPO Level 2 footprints", pad=5)
     _format_map_axis(native_axis, show_y_label=True)
 
-    masked_grid = np.ma.masked_invalid(gridded)
-    image = grid_axis.pcolormesh(
-        edges,
-        edges,
-        masked_grid,
+    half_extent = IMG_RANGE / 2
+    image = grid_axis.imshow(
+        gridded / NO2_SCALE,
         cmap=color_map,
         norm=normalization,
-        edgecolors=(1.0, 1.0, 1.0, 0.42),
-        linewidth=0.24,
-        shading="flat",
+        origin="upper",
+        extent=(-half_extent, half_extent, -half_extent, half_extent),
+        interpolation="none",
     )
     grid_axis.set_facecolor("#D9D9D9")
-    grid_axis.set_title("(b) Area-weighted 3 km AOI grid", pad=5)
-    grid_axis.set_xlabel("East-west distance (km)")
-    grid_axis.text(
-        34.0,
-        32.5,
-        "24 × 24 cells",
-        ha="right",
-        va="top",
-        fontsize=6.5,
-        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.86, "pad": 1.8},
-    )
-    _plot_source(grid_axis)
+    grid_axis.set_title("(b) Area-weighted 3 km grid", pad=5)
     _format_map_axis(grid_axis, show_y_label=False)
 
     process_axis.set_axis_off()
     process_axis.annotate(
         "area-overlap\nweighted mean",
-        xy=(0.95, 0.50),
-        xytext=(0.05, 0.50),
+        xy=(0.96, 0.50),
+        xytext=(0.04, 0.50),
         ha="center",
         va="center",
-        fontsize=6.5,
-        arrowprops={"arrowstyle": "-|>", "color": "#4D4D4D", "linewidth": 0.9},
+        fontsize=7.2,
+        arrowprops={
+            "arrowstyle": "-|>",
+            "color": "#303030",
+            "linewidth": 1.35,
+            "mutation_scale": 12,
+        },
     )
 
     colorbar = figure.colorbar(image, cax=colorbar_axis, orientation="horizontal")
@@ -246,10 +171,10 @@ def main() -> None:
     colorbar.ax.tick_params(labelsize=6.5, length=2.5)
     colorbar.outline.set_linewidth(0.5)
 
-    figure.subplots_adjust(left=0.08, right=0.98, top=0.92, bottom=0.13)
+    figure.subplots_adjust(left=0.085, right=0.985, top=0.91, bottom=0.15)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    figure.savefig(f"{OUTPUT_STEM}.pdf", bbox_inches="tight")
-    figure.savefig(f"{OUTPUT_STEM}.png", dpi=450, bbox_inches="tight")
+    figure.savefig(OUTPUT_STEM.with_suffix(".pdf"), bbox_inches="tight")
+    figure.savefig(OUTPUT_STEM.with_suffix(".png"), dpi=450, bbox_inches="tight")
     plt.close(figure)
 
 
