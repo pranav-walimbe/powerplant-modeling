@@ -1,0 +1,539 @@
+\documentclass[sigconf,nonacm]{acmart}
+
+\newcommand{\NOx}{NO$_x$}
+\newcommand{\modelname}{PlumeWatch}
+
+\title{Detecting Power Plant \texorpdfstring{\NOx}{NOx} Emissions Changes using
+Physics-Guided Deep Learning and TEMPO Satellite Imagery}
+
+\author{Pranav Walimbe}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \city{Berkeley}
+  \state{California}
+  \country{USA}
+}
+\email{pranav.walimbe@berkeley.edu}
+
+\author{Ron Cohen}
+\affiliation{%
+  \institution{University of California, Berkeley}
+  \city{Berkeley}
+  \state{California}
+  \country{USA}
+}
+\email{rccohen@berkeley.edu}
+
+\date{October 3, 2026}
+
+\begin{document}
+
+\begin{abstract}
+NASA's Tropospheric Emissions: Monitoring of Pollution (TEMPO) instrument
+provides hourly daytime observations of tropospheric nitrogen dioxide
+(NO$_2$) across North America. These observations could support independent,
+facility-level monitoring of power plant nitrogen oxides (\NOx{}) emissions,
+filling gaps caused by continuous emissions monitoring system (CEMS) failures
+and covering facilities not subject to hourly emissions-reporting requirements.
+Previous studies have estimated hourly point-source emissions from individual
+satellite scenes using empirical methods such as cross-sectional flux and the
+directional derivative approach. However, these estimates are sensitive to
+retrieval uncertainty, changing atmospheric transport, TEMPO's coarse spatial
+resolution, signals from nearby emitters, and temporal mismatch with hourly
+CEMS totals. We instead formulate facility monitoring as change detection over
+sequences of TEMPO observations. This relative target uses repeated scans to
+capture plume evolution while reducing sensitivity to persistent background
+levels and biases in absolute column values. We develop a physics-guided
+convolutional gated recurrent unit model (ConvGRU) that processes five consecutive
+TEMPO observations, High-Resolution Rapid Refresh (HRRR) meteorological fields,
+and transport residuals. The network jointly classifies the target power plant's
+emissions as increasing, steady, or decreasing and predicts a spatial map of
+contributions from emitting facilities within the observed scene. On a held-out
+evaluation set containing more than 20,000 samples from over 95 U.S. power
+plants observed between August 2023 and July 2026, the model achieves a
+classification macro-F1 score of 0.54, which outperformed a baseline MLP (0.49).
+These results support the use of sequential TEMPO imagery for detecting short-term changes in power plant
+emissions across facilities and observing conditions.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+
+Based on U.S. Environmental Protection Agency (EPA) inventory data, power plants
+in the U.S. electricity-generation sector emitted approximately 0.74 million
+short tons of \NOx{} in 2023, about 9.5\% of national
+emissions~\cite{epa2026emissionsTrends}. \NOx{} emissions contribute to
+ground-level ozone and secondary particulate matter, pollutants that can
+inflame and damage the airways, reduce lung function, and aggravate
+asthma~\cite{epa2016noxHealth}. EPA regulations require most large U.S.
+fossil-fuel-fired generating units that produce electricity for sale to submit
+unit-level hourly emissions data on a quarterly basis~\cite{epa2026powerMonitoring}.
+However, monitoring equipment malfunctions and maintenance can make CEMS
+measurements unavailable or invalid, requiring plants to report calculated
+substitute values instead of direct measurements~\cite{epa2021substitute}.
+Behind-the-meter generators that do not sell electricity can fall outside
+federal hourly reporting requirements, as illustrated by the natural-gas
+turbines powering SpaceXAI's Colossus 2 data center~\cite{gauld2026dataCenter}.
+Outside the United States, comparable public hourly, unit-level emissions data
+are generally unavailable, even where facilities continuously monitor
+emissions~\cite{huang2026detectability}. Independent estimates could therefore
+fill reporting gaps and reveal short-term changes before the EPA's quarterly release
+of hourly emissions data.
+
+TEMPO is an ultraviolet-visible spectrometer hosted aboard a geostationary satellite
+that observes tropospheric vertical column densities (TVCDs) for various trace gases
+across North America during daylight hours~\cite{zoogman2017tempo}. Earlier polar-orbiting
+instruments, including the Ozone Monitoring Instrument (OMI) and TROPOspheric Monitoring
+Instrument (TROPOMI), typically observe a given location once per day; TEMPO's geostationary
+view provides approximately hourly scans with finer spatial
+resolution~\cite{levelt2006omi,veefkind2012tropomi,zoogman2017tempo}. Hourly sampling
+captures intraday changes in power plant plumes and atmospheric transport that daily
+observations can miss. However, power plant signals in TEMPO NO$_2$ TVCDs can be weakened
+or obscured by factors including evolving meteorology and atmospheric chemistry, cloud cover,
+viewing geometry and retrieval uncertainty, dilution within TEMPO's 2.0-by-4.75 km spatial resolution
+per pixel, and interference from nearby emission sources~\cite{tempo2026userGuide,huang2026detectability,gauld2026dataCenter}.
+Cross-comparisons with CEMS data, which is the most reliable ground truth available, introduce an
+additional temporal mismatch because TEMPO observes a facility at a specific time during each hourly scan,
+whereas CEMS data aggregate emissions over an entire clock hour~\cite{tempo2026userGuide,epa2026powerMonitoring}.
+
+Satellite-based point-source studies typically combine observed column enhancements
+with modeled atmospheric transport. Cross-sectional flux (CSF) integrates
+background-subtracted columns across plume transects, while the directional
+derivative approach (DDA) relates spatial column gradients to wind
+fields~\cite{santaren2025benchmarking,sun2025hourly}. Santaren et al. benchmarked
+five such methods on synthetic daily satellite scenes with known source rates and
+found that cloud gaps and wind errors limited their accuracy and
+coverage~\cite{santaren2025benchmarking}. For TEMPO, Sun et al. added hourly changes in the
+observed NO$_2$ column to DDA and compared estimates for 14 U.S. power plants with
+CEMS, but retrieval and chemical-conversion uncertainties produced substantial low
+bias~\cite{sun2025hourly}. Beaudry et al. fit a rise--decay model to TEMPO plumes
+from 64 plants and also found weaker performance for lower-emitting
+sources~\cite{beaudry2026quantification}.
+
+Machine learning offers an alternative by learning emission-related plume patterns
+from data. Huang and Wang predicted
+whether TROPOMI could detect power plant NO$_2$ plumes from plant, meteorological,
+surface, and sensor variables rather than estimating emissions from the
+imagery~\cite{huang2026detectability}. Alnaim et al. used recurrent models with TROPOMI,
+meteorological, and EPA data to estimate power plant emissions, but did not test
+transfer to previously unseen plants~\cite{alnaim2022evaluating}. Regression has
+also been demonstrated for other gases: U-Plume combines learned methane plume masks
+with imagery and wind to infer source rates, while Dumont et al. trained a CNN on
+simulated CO$_2$ and wind fields to estimate power plant
+emissions~\cite{bruno2024uplume,dumont2024deepLearning}. To our knowledge, no published study
+has used sequences of hourly TEMPO NO$_2$ imagery to infer facility-level emissions
+or behavior.
+
+Estimating absolute hourly emissions from individual TEMPO scenes requires
+separating weak facility signals from background pollution and resolving
+uncertainties in retrieval, atmospheric chemistry, and transport. We instead
+use TEMPO's hourly sampling to detect relative changes over short observation
+sequences, reducing dependence on absolute column values and persistent
+background levels.
+
+Our contributions are as follows:
+
+\begin{itemize}
+    \item We formulate satellite-based power plant monitoring as a three-class
+    change-detection task that identifies increasing, steady, and decreasing
+    emissions behavior.
+
+    \item We introduce a physics-guided deep learning framework that combines
+    sequences of TEMPO NO$_2$ observations with meteorology and transport
+    information. The model jointly predicts emissions behavior and a spatial
+    map of emissions contributions within the observed scene.
+
+    \item We evaluate the model on held-out power plants across geographic
+    regions, seasons, and operating profiles and compare its performance with
+    the temporal MLP.
+\end{itemize}
+
+\section{Data Sources}
+
+\subsection{TEMPO NO\texorpdfstring{$_2$}{2} Data}
+
+NASA distributes TEMPO NO$_2$ retrievals in two formats: Level 2 data on the
+instrument's native measurement footprints and Level 3 data regridded from each
+east-to-west scan~\cite{tempo2026userGuide}. We downloaded version 4 Level 2
+NO$_2$ retrievals from August 2023 through August 2026. Along with NO$_2$
+TVCDs, the product provides metadata including native footprint geometry,
+mirror-step observation times, main data quality flags, and effective cloud
+fractions, which we later use for regridding, quality filtering, and temporal
+alignment with CEMS records.
+
+\subsection{CEMS Records}
+
+We downloaded hourly emissions records for individual power plant units and
+annual facility and unit attributes from the U.S. Environmental Protection
+Agency's Clean Air Markets Program Data (CAMPD) APIs for August 2023 through
+September 2026. From the hourly records, we use facility and unit identifiers,
+reporting date and hour, \NOx{} mass and its measurement flag, operating time,
+and primary fuel. From the annual attributes, we use facility coordinates and
+unit-level primary fuel.
+
+\subsection{HRRR Weather Data}
+
+The High-Resolution Rapid Refresh (HRRR) is an hourly weather model with a
+3~km grid covering the contiguous United States. From NOAA's public HRRR
+archive, we downloaded hourly 2~m air temperature and eastward and northward
+wind components at 80~m above ground for August 2023 through August 2026.
+
+\section{Methods}
+
+\subsection{AOI Construction}
+
+For each power plant, we define a 72~km $\times$ 72~km area of interest (AOI)
+centered on the facility and divide it into a $24 \times 24$ grid of
+3~km $\times$ 3~km cells. For each AOI-hour, we sum the unit-level \NOx{} mass
+reported by all facilities in the AOI and discard the hour if any contributing
+measurement is invalid or unavailable. We score each AOI using its median total
+\NOx{} mass across hours whose mean unit operating time meets or exceeds the
+AOI-specific median. We retain the highest-scoring 50\% to focus the dataset on
+emissions signals more likely to be detected by TEMPO.
+
+\subsection{TEMPO Regridding and Quality Filtering}
+
+TEMPO Level 2 observations lie on irregular native footprints, whereas our
+model uses a fixed spatial grid. We project the footprint boundaries and AOI
+grid to the contiguous-U.S. Albers equal-area coordinate system. We then assign
+each AOI grid cell an NO$_2$ TVCD by averaging the TEMPO footprints that
+intersect it, weighted by their area of overlap. Figure~\ref{fig:tempoRegridding}
+illustrates this mapping from native footprints to the fixed AOI grid.
+
+\begin{figure}[t]
+    \centering
+    \fbox{\parbox[c][1.15in][c]{0.91\columnwidth}{\centering
+    Regridding schematic placeholder}}
+    \caption{TEMPO Level 2 regridding to the AOI grid.}
+    \Description{TEMPO footprints mapped to the AOI grid.}
+    \label{fig:tempoRegridding}
+\end{figure}
+
+A footprint contributes to the NO$_2$ average only when its main data quality
+flag equals zero and its effective cloud fraction does not exceed 0.20. Grid
+cells without an accepted footprint overlap remain masked, and we retain a
+binary mask of the original valid cells. We fill the masked NO$_2$ cells by
+bilinear interpolation before later processing.
+
+\subsection{Sample Construction}
+
+Each sample contains five consecutive observations of one AOI, indexed from
+$t_0$ to $t_4$. We retain a sequence only when each pair of adjacent TEMPO
+scans is separated by 40--70 minutes and every NO$_2$ raster has valid pixel coverage of at
+least 85\%. At each timestep, we pair the TEMPO raster with
+the HRRR temperature and wind rasters from the closest hour interpolated to a common
+$24 \times 24$ raster size and spatial coverage as the NO$_2$ rasters.
+
+Because CEMS records correspond to clock hours rather than TEMPO scan times,
+we linearly interpolate the AOI-hour \NOx{} emissions between the surrounding
+hourly CEMS records at each scan time. Let $E_i$ denote the interpolated emissions
+at time $t_i$. For scans $t_a$ through $t_b$, we calculate the time-weighted mean
+\begin{equation}
+    \overline{E}_{a:b} =
+    \frac{\sum_{i=a}^{b-1}(t_{i+1}-t_i)(E_i+E_{i+1})/2}
+    {t_b-t_a}.
+\end{equation}
+We define the sequence change as
+$\Delta E=\overline{E}_{2:4}-\overline{E}_{0:2}$ and use the threshold
+$\theta=250~\mathrm{lb\,h^{-1}}$ to assign its category:
+\begin{equation}
+    c =
+    \begin{cases}
+        \text{increase}, & \Delta E \geq \theta, \\
+        \text{steady}, & -\theta < \Delta E < \theta, \\
+        \text{decrease}, & \Delta E \leq -\theta.
+    \end{cases}
+\end{equation}
+
+Each sample also includes two $24 \times 24$ spatial contribution targets so
+the model can jointly learn plume attribution. We interpolate each facility's
+emissions to the five scan times and calculate its change using the same early
+and late windows as the class label. For increase samples, we normalize positive
+facility changes and distribute them around the facility locations; decrease
+samples use the normalized magnitudes of negative changes. The unused target is
+an all-zero raster, and steady samples use all-zero rasters for both targets.
+Figure~\ref{fig:sample-construction} summarizes one example sequence.
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{visuals/sample-construction.pdf}{%
+      \includegraphics[width=\columnwidth]{visuals/sample-construction.pdf}%
+  }{%
+      \fbox{\parbox[c][1.5in][c]{0.9\columnwidth}{\centering
+      \textit{Placeholder: five NO$_2$, temperature, and wind observations;}\\[0.25em]
+      \textit{behavior label and spatial contribution targets}}}
+  }
+  \caption{Example five-timestep sample.}
+  \Description{Five-timestep raster inputs and model targets.}
+  \label{fig:sample-construction}
+\end{figure}
+
+\subsection{Transport Model}
+
+We also supply the model with rasters that use a transport model to separate
+new NO$_2$ emissions from existing plume at a given timestep.
+For each interval $\Delta t_i=t_{i+1}-t_i$, let $N_i(\boldsymbol{x})$ denote
+the earlier NO$_2$ raster, $\boldsymbol{u}_i(\boldsymbol{x})$ its wind field,
+and $B_i$ the median NO$_2$ value along the raster boundary. We approximate
+transport as
+
+\begin{equation}
+  \begin{aligned}
+    \overline{\boldsymbol{u}}_i
+      &= \gamma\!\left[(1-\lambda)\boldsymbol{u}_i
+         + \lambda\boldsymbol{u}_{i+1}\right], \\
+    A_i(\boldsymbol{x})
+      &= N_i\!\left(\boldsymbol{x}
+         -\overline{\boldsymbol{u}}_i(\boldsymbol{x})\Delta t_i\right), \\
+    \sigma_i
+      &= \sigma_0\sqrt{\frac{\Delta t_i}{1~\mathrm{h}}}, \\
+    D_i
+      &= B_i+G_{\sigma_i}*(A_i-B_i), \\
+    \widehat{N}_{i+1}
+      &= B_i+\exp\!\left(-\frac{\Delta t_i}{\tau}\right)(D_i-B_i), \\
+    R_i
+      &= N_{i+1}-\widehat{N}_{i+1}.
+  \end{aligned}
+\end{equation}
+
+The semi-Lagrangian step backtraces each destination cell and uses bilinear
+sampling to obtain the advected field $A_i$. Convolution with the Gaussian
+kernel $G_{\sigma_i}$ disperses the enhancement above the boundary background,
+and the exponential term applies effective NO$_2$ decay with lifetime $\tau$.
+The parameters $\gamma$, $\lambda$, $\sigma_0$, and $\tau$ control wind-speed
+scaling, endpoint-wind blending, dispersion, and decay; we select them using
+validation data as part of the model optimization procedure described later.
+
+We compute one residual $R_i$ for each adjacent pair, producing four residual
+rasters per sample. We transport the earlier validity mask through the same
+advection and dispersion steps and combine it with the later mask to identify
+unreliable residual pixels. Figure~\ref{fig:transport-residuals} shows the four
+residuals for an example sequence.
+
+\begin{figure}[t]
+  \centering
+  \IfFileExists{visuals/transport-residuals.pdf}{%
+      \includegraphics[width=\columnwidth]{visuals/transport-residuals.pdf}%
+  }{%
+      \fbox{\parbox[c][1.25in][c]{0.9\columnwidth}{\centering
+      \textit{Placeholder: transport residuals for}\\[0.25em]
+      $t_0 \!\rightarrow\! t_1$, $t_1 \!\rightarrow\! t_2$,
+      $t_2 \!\rightarrow\! t_3$, and $t_3 \!\rightarrow\! t_4$}}
+  }
+  \caption{Transport residuals for a five-timestep sample.}
+  \Description{Transport residuals between consecutive observations.}
+  \label{fig:transport-residuals}
+\end{figure}
+
+\subsection{Dataset Stratification}
+
+Our split design has three goals: prevent leakage from overlapping AOIs,
+approximate a 70\%/15\%/15\% division, and distribute the three classes across
+the splits while limiting class imbalance. We group overlapping AOIs into
+connected clusters and treat each cluster as an indivisible assignment unit.
+Because each cluster contains an arbitrary number of AOIs, samples, and class
+instances, cluster-level assignment cannot generally meet every target exactly.
+Steady samples account for $\sim90\%$ of the raw sample pool, compared with
+$\sim7\%$ increase and $\sim3\%$ decrease samples. Although we later use a class-weighted
+training loss, we control the composition of each split so that steady behavior
+does not dominate training or evaluation.
+
+We use mixed-integer programming to assign each cluster to exactly one split
+while minimizing normalized deviations from the target AOI and sample counts.
+The first optimization targets the 70\%/15\%/15\% division and fixes the
+resulting training clusters. A second optimization divides the remaining
+clusters equally between validation and test while balancing their AOI, sample,
+and per-class counts. We then downsample each training class to the size of the
+smallest class. In validation and test, we retain every increase and decrease
+sample and uniformly sample steady examples until their count matches that of
+the more common change class.
+
+\subsection{ConvGRU Model}
+
+\begin{figure*}[!t]
+  \centering
+  \IfFileExists{visuals/convgru-architecture.pdf}{%
+      \includegraphics[width=\textwidth]{visuals/convgru-architecture.pdf}%
+  }{%
+      \fbox{\parbox[c][1.35in][c]{0.94\textwidth}{\centering
+      \textit{Placeholder: ConvGRU architecture}\\[0.35em]
+      Raster encoders $\rightarrow$ ConvGRU $\rightarrow$ visual embedding\\
+      Temporal features $\rightarrow$ feedforward encoder $\rightarrow$ late fusion
+      $\rightarrow$ classification head; ConvGRU $\rightarrow$ spatial head}}
+  }
+  \caption{ConvGRU architecture.}
+  \Description{ConvGRU encoders, recurrent core, late fusion, and output heads.}
+  \label{fig:convgru-architecture}
+\end{figure*}
+
+We use a convolutional recurrent neural network with a convolutional gated
+recurrent unit (ConvGRU) to preserve spatial structure while combining the five
+observations in each sample. At each timestep, an
+observation encoder processes NO$_2$, the NO$_2$ quality mask, temperature, and
+the two wind components. A separate encoder processes each of the four
+transport residuals together with its quality mask. Each encoder shares weights
+across time and reduces the $24 \times 24$ inputs to spatial feature maps for
+temporal aggregation. Figure~\ref{fig:convgru-architecture} summarizes the
+architecture.
+
+The encoded first observation initializes the recurrent hidden state. At each
+later timestep, the model concatenates the current observation features with
+the transport residual from the preceding interval, fuses them with a
+$1 \times 1$ convolution, and updates the hidden state with the ConvGRU. Its
+convolutional gates retain the spatial arrangement of plume features while
+learning how much information to preserve or replace across the sequence. This
+design lets the network use both the observed atmospheric state and the portion
+of each change that the transport model does not explain.
+
+The final recurrent feature map feeds two prediction heads. For classification,
+we combine global average and maximum pooling to form a visual embedding. A
+small feedforward network separately encodes the four temporal features, and its output is
+concatenated with the visual embedding before the classification head produces
+logits for the increase, steady, and decrease classes. This late-fusion design
+keeps the tabular context separate while the ConvGRU learns the raster sequence.
+The spatial head upsamples the recurrent feature map into two $24 \times 24$
+contribution rasters representing increases and decreases. Sharing the recurrent
+representation allows the model to learn emissions behavior and spatial
+attribution jointly.
+
+\subsection{Temporal MLP}
+
+The temporal MLP measures how much emissions-change
+behavior can be predicted from recurring daily and annual patterns without
+satellite or weather inputs. We represent each sample using
+four cyclic features: the sine and cosine of local solar hour (midpoint of timesteps) and the sine and
+cosine of day of year. The temporal MLP maps these features through hidden layers of 16
+and 8 units, each followed by layer normalization and a SiLU activation. A
+linear output layer produces logits for the three behavior classes.
+Figure~\ref{fig:temporal-mlp} shows this architecture.
+
+\begin{figure}[H]
+  \centering
+  \IfFileExists{visuals/temporal-mlp-architecture.pdf}{%
+      \includegraphics[width=0.82\columnwidth]{visuals/temporal-mlp-architecture.pdf}%
+  }{%
+      \fbox{\parbox[c][0.85in][c]{0.86\columnwidth}{\centering
+      \textit{Placeholder: baseline MLP}\\[0.3em]
+      Four cyclic time features $\rightarrow$ baseline MLP $\rightarrow$ three class logits}}
+  }
+  \caption{Temporal MLP architecture.}
+  \Description{Temporal MLP inputs, hidden layers, and class output.}
+  \label{fig:temporal-mlp}
+\end{figure}
+
+\subsection{Training Procedure}
+
+Table~\ref{tab:dataset-composition} summarizes the final dataset used to train
+and evaluate both models. We standardize the NO$_2$, wind, temperature, and
+transport-residual rasters and the tabular inputs using the corresponding
+training-set mean and standard deviation. We apply these training-derived
+statistics unchanged to the validation and test splits.
+
+\begin{table}[t]
+  \caption{Dataset composition by split and class.}
+  \label{tab:dataset-composition}
+  \centering
+  \small
+  \begin{tabular}{@{}lrrrrr@{}}
+    \toprule
+    Split & AOIs & Decrease & Steady & Increase & Total \\
+    \midrule
+    Training   & 469 & 17,130 & 23,289 & 29,888 & 70,307 \\
+    Validation & 101 & 3,198 & 8,589 & 10,411 & 22,198 \\
+    Test       & 97 & 3,184 & 7,764 & 10,093 & 21,041 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[t]
+  \caption{Training configuration.}
+  \label{tab:training-configuration}
+  \centering
+  \small
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    Parameter & Baseline MLP & ConvGRU \\
+    \midrule
+    Trainable parameters & 291 & 865,805 \\
+    Optimizer & \multicolumn{2}{c}{AdamW} \\
+    Batch size & 128 & 128 \\
+    Initial learning rate & $10^{-3}$ & $10^{-4}$ \\
+    Weight decay & $10^{-3}$ & $10^{-3}$ \\
+    Dropout & -- & 0.30 \\
+    Spatial-loss weight $\lambda_{\mathrm{sp}}$ & -- & 1.0 \\
+    Gradient-norm limit & \multicolumn{2}{c}{5.0} \\
+    LR scheduler & \multicolumn{2}{c}{Reduce on plateau} \\
+    LR reduction factor & \multicolumn{2}{c}{0.5} \\
+    Scheduler patience & \multicolumn{2}{c}{10 epochs} \\
+    Selection metric & \multicolumn{2}{c}{Validation macro-F1} \\
+    Early-stopping patience & \multicolumn{2}{c}{10 epochs} \\
+    Hardware & \multicolumn{2}{c}{1 NVIDIA RTX A5000 GPU} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Both classifiers use inverse-frequency class weights computed from the final
+training split. The temporal MLP minimizes weighted cross-entropy. For the
+ConvGRU, we combine this classification objective with a debiased unbalanced
+Sinkhorn divergence between the predicted and target contribution rasters:
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_{\mathrm{CE}}
+    + \lambda_{\mathrm{sp}}\mathcal{L}_{\mathrm{sp}},
+\end{equation}
+where $\lambda_{\mathrm{sp}}$ controls the contribution of the spatial task.
+The unbalanced spatial loss penalizes misplaced contribution mass while
+allowing the all-zero targets used by steady samples and inactive channels.
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=\textwidth]{visuals/classification-performance.pdf}
+  \caption{Classification performance by split.}
+  \Description{Baseline MLP and ConvGRU classification metrics by split.}
+  \label{fig:classification-performance}
+\end{figure*}
+
+\section{Results}
+
+\subsection{Classification Performance}
+
+We evaluate classification using macro-F1 and balanced accuracy to account for
+differences in class prevalence. On the test set, the ConvGRU achieves a
+macro-F1 of 0.540 and balanced accuracy of 0.547, compared with 0.494 and 0.513
+for the temporal MLP. As shown in Figure~\ref{fig:classification-performance},
+the improvement is concentrated in the steady class, while performance on
+increase samples is lower for some metrics. Results across the training,
+validation, and test splits show the same aggregate advantage for the ConvGRU.
+
+\subsection{Spatial Attribution Performance}
+
+\begin{figure}[H]
+  \centering
+  \fbox{\parbox[c][1.45in][c]{0.90\columnwidth}{\centering
+  \textit{Placeholder: spatial attribution loss}\\[0.6em]
+  Per-class loss for the training, validation, and test splits.}}
+  \caption{Spatial attribution loss by class and split.}
+  \Description{Spatial attribution loss by class and split.}
+  \label{fig:spatial-attribution-loss}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \fbox{\parbox[c][1.75in][c]{0.90\columnwidth}{\centering
+  \textit{Placeholder: representative spatial attribution predictions}\\[0.6em]
+  Two low-loss test samples and two high-loss test samples, each showing the
+  target and predicted contribution rasters on a shared color scale.}}
+  \caption{Representative spatial attribution predictions.}
+  \Description{Target and predicted rasters for two low-loss and two high-loss
+  samples.}
+  \label{fig:spatial-attribution-examples}
+\end{figure}
+
+\subsection{Performance Across Evaluation Strata}
+
+\subsection{Ablation Study}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}

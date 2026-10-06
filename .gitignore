@@ -71,7 +71,7 @@ instance/
 .scrapy
 
 # Sphinx documentation
-docs/_build/
+assets/_build/
 
 # PyBuilder
 .pybuilder/
@@ -214,6 +214,8 @@ CLAUDE.md
 !/scripts/clean_workspace.sh
 !/scripts/launch_dataset_generation.sh
 !/scripts/slurm/
+!/scripts/visuals/
+!/scripts/visuals/*.py
 /scripts/slurm/*
 !/scripts/slurm/build_tempo_mapping_index.sh
 !/scripts/slurm/build_tempo_mapping_observations.sh
