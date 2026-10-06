@@ -161,19 +161,21 @@ one validation-only summary per trial, `trials.csv`, and `study_summary.json`.
 
 ## Evaluation and artifacts
 
-`results.json` reports accuracy, balanced accuracy, macro F1, macro one-vs-rest
-AUROC, per-class F1, per-class recall, confusion matrices, and predicted-class
-frequencies.
+`results.json` reports overall accuracy, balanced accuracy, macro F1, macro
+one-vs-rest AUROC, per-class accuracy (recall), per-class F1,
+confusion matrices, and predicted-class frequencies.
 The run also writes row-level predictions, best checkpoints, normalization
 state, residual statistics, and shuffled-context diagnostics.
 
-The trainer produces four figures:
+The trainer produces five figures:
 
 - `split_class_f1.png` compares macro F1 and per-class F1 with class support for
   every split;
+- `split_class_accuracy.png` compares overall and per-class accuracy with class
+  support for every split;
 - `training_curves.png` shows train and validation loss;
-- `accuracy_by_characteristic.png` compares test accuracy by AOI heat input,
-  unit count, calendar month, and midpoint local solar hour.
+- `macro_f1_by_characteristic.png` compares test macro F1 by AOI heat input,
+  unit count, calendar month, and midpoint local solar hour;
 - `joint_prediction_samples.png` shows 20 deterministic, class-balanced test
   examples ordered from strongest NOx decrease to strongest increase. It includes
   all five NO2 inputs, four transport residuals, the true class, and both true

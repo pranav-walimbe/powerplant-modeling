@@ -11,6 +11,7 @@ from matplotlib.axes import Axes
 from matplotlib.container import BarContainer
 from modeling.dataset import FINAL_TIMESTEP_TIME_COLUMN, midpoint_local_solar_hour
 from modeling.eval_utils import PREDICTED_CLASS_COL, TRUE_CLASS_COL, classification_metrics
+from sklearn.metrics import f1_score
 
 from config import MODEL_CLASS_NAMES
 
@@ -126,6 +127,77 @@ def plot_split_class_f1(
     _save(figure, run_dir, "split_class_f1")
 
 
+def plot_split_class_accuracy(
+    model_frames: dict[str, dict[str, pd.DataFrame]],
+    run_dir: str | Path,
+) -> None:
+    """Plot overall and per-class accuracy for each data split.
+
+    Args:
+        model_frames: Row-level predictions by model and split.
+        run_dir: Model-run output directory.
+    """
+    sns.set_theme(style="whitegrid", font_scale=1.0)
+    models = _available_models(model_frames)
+    metrics = {
+        model_name: {
+            split: classification_metrics(model_frames[model_name][split]) for split in SPLIT_ORDER
+        }
+        for model_name in models
+    }
+    figure = plt.figure(figsize=(16, 10))
+    grid = figure.add_gridspec(2, len(SPLIT_ORDER), height_ratios=(1.0, 1.25))
+    overall_axis = figure.add_subplot(grid[0, :])
+    class_axes = [figure.add_subplot(grid[1, index]) for index in range(len(SPLIT_ORDER))]
+    width = 0.8 / len(models)
+    offsets = (np.arange(len(models)) - (len(models) - 1) / 2) * width
+
+    split_positions = np.arange(len(SPLIT_ORDER), dtype=np.float64)
+    for model_name, offset in zip(models, offsets, strict=True):
+        scores = [metrics[model_name][split]["overall_accuracy"] for split in SPLIT_ORDER]
+        bars = overall_axis.bar(
+            split_positions + offset,
+            scores,
+            width=width,
+            color=MODEL_COLORS[model_name],
+            label=MODEL_DISPLAY_NAMES[model_name],
+        )
+        _label_bars(overall_axis, bars)
+    overall_axis.set(
+        title="Overall accuracy by split",
+        ylabel="Accuracy",
+        xticks=split_positions,
+        xticklabels=[split.title() for split in SPLIT_ORDER],
+        ylim=(0, 1.08),
+    )
+    overall_axis.legend(loc="lower right")
+
+    class_positions = np.arange(len(MODEL_CLASS_NAMES), dtype=np.float64)
+    for axis, split in zip(class_axes, SPLIT_ORDER, strict=True):
+        class_counts = metrics[models[0]][split]["class_counts"]
+        for model_name, offset in zip(models, offsets, strict=True):
+            class_accuracy = metrics[model_name][split]["class_accuracy"]
+            scores = [class_accuracy[class_name] for class_name in MODEL_CLASS_NAMES]
+            bars = axis.bar(
+                class_positions + offset,
+                scores,
+                width=width,
+                color=MODEL_COLORS[model_name],
+                label=MODEL_DISPLAY_NAMES[model_name],
+            )
+            _label_bars(axis, bars)
+        axis.set(
+            title=f"{split.title()} per-class accuracy",
+            ylabel="Accuracy",
+            xticks=class_positions,
+            xticklabels=[f"{name.title()}\n(n={class_counts[name]:,})" for name in MODEL_CLASS_NAMES],
+            ylim=(0, 1.08),
+        )
+    figure.suptitle("Overall and per-class accuracy by split and model", fontsize=16)
+    figure.tight_layout()
+    _save(figure, run_dir, "split_class_accuracy")
+
+
 def plot_training_curves(
     histories: dict[str, tuple[list[float], list[float]]],
     run_dir: str | Path,
@@ -160,9 +232,18 @@ def plot_training_curves(
     _save(figure, run_dir, "training_curves")
 
 
-def _accuracy(frame: pd.DataFrame) -> float:
-    # Calculate row-level classification accuracy
-    return float((frame[TRUE_CLASS_COL] == frame[PREDICTED_CLASS_COL]).mean())
+def _macro_f1(frame: pd.DataFrame) -> float:
+    # Calculate fixed-label macro F1 for one group
+    labels = np.arange(len(MODEL_CLASS_NAMES))
+    return float(
+        f1_score(
+            frame[TRUE_CLASS_COL],
+            frame[PREDICTED_CLASS_COL],
+            labels=labels,
+            average="macro",
+            zero_division=0,
+        )
+    )
 
 
 def _tertiles(values: pd.Series) -> pd.Series:
@@ -200,7 +281,7 @@ def _stratum_result(
         "value_min": float(values.min()),
         "value_max": float(values.max()),
     }
-    row.update({f"{model_name}_accuracy": _accuracy(frame.loc[mask]) for model_name, frame in frames.items()})
+    row.update({f"{model_name}_macro_f1": _macro_f1(frame.loc[mask]) for model_name, frame in frames.items()})
     return row
 
 
@@ -221,8 +302,8 @@ def _aligned_frames(
     return frames
 
 
-def _characteristic_accuracy_table(model_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
-    # Compare model accuracy across AOI properties, month, and midpoint solar hour
+def _characteristic_macro_f1_table(model_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    # Compare model macro F1 across AOI properties, month, and midpoint solar hour
     test_frames = _aligned_frames(model_frames, "test")
     test_reference = next(iter(test_frames.values()))
 
@@ -283,18 +364,18 @@ def _characteristic_accuracy_table(model_frames: dict[str, dict[str, pd.DataFram
     return pd.DataFrame(rows)
 
 
-def plot_accuracy_by_characteristic(
+def plot_macro_f1_by_characteristic(
     model_frames: dict[str, dict[str, pd.DataFrame]],
     run_dir: str | Path,
 ) -> None:
-    """Plot accuracy by test AOI characteristics, month, and midpoint solar hour.
+    """Plot macro F1 by test AOI characteristics, month, and midpoint solar hour.
 
     Args:
         model_frames: Row-level predictions by model and split.
         run_dir: Model-run output directory.
     """
-    table = _characteristic_accuracy_table(model_frames)
-    table.to_csv(Path(run_dir) / "accuracy_by_characteristic.csv", index=False)
+    table = _characteristic_macro_f1_table(model_frames)
+    table.to_csv(Path(run_dir) / "macro_f1_by_characteristic.csv", index=False)
     sns.set_theme(style="whitegrid", font_scale=0.95)
     columns = 2
     rows = int(np.ceil(len(CHARACTERISTIC_PANELS) / columns))
@@ -311,7 +392,7 @@ def plot_accuracy_by_characteristic(
         for model_name in models:
             axis.plot(
                 positions,
-                subset[f"{model_name}_accuracy"].to_numpy(dtype=np.float64),
+                subset[f"{model_name}_macro_f1"].to_numpy(dtype=np.float64),
                 marker="o",
                 linewidth=2,
                 color=MODEL_COLORS[model_name],
@@ -332,18 +413,18 @@ def plot_accuracy_by_characteristic(
         axis.set(
             title=display_name,
             xlabel=x_label,
-            ylabel=f"{split.title()} accuracy",
+            ylabel=f"{split.title()} macro F1",
             xticks=positions,
             xticklabels=tick_labels,
             ylim=(0, 1.05),
         )
     flat_axes[0].legend(loc="lower right", fontsize=8)
     figure.suptitle(
-        "Model accuracy by AOI characteristic, calendar month, and midpoint solar hour",
+        "Model macro F1 by AOI characteristic, calendar month, and midpoint solar hour",
         fontsize=16,
     )
     figure.tight_layout()
-    _save(figure, run_dir, "accuracy_by_characteristic")
+    _save(figure, run_dir, "macro_f1_by_characteristic")
 
 
 def plot_joint_prediction_samples(
