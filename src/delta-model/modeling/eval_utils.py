@@ -13,7 +13,7 @@ TRUE_CLASS_COL = "class_true"
 PREDICTED_CLASS_COL = "class_predicted"
 PROBABILITY_COLUMNS = tuple(f"probability_{name}" for name in MODEL_CLASS_NAMES)
 LOGIT_COLUMNS = tuple(f"logit_{name}" for name in MODEL_CLASS_NAMES)
-COMPARISON_METRICS = ("balanced_accuracy", "macro_f1", "macro_ovr_roc_auc")
+COMPARISON_METRICS = ("overall_accuracy", "balanced_accuracy", "macro_f1", "macro_ovr_roc_auc")
 
 
 def classification_metrics(frame: pd.DataFrame) -> dict[str, object]:
@@ -44,11 +44,14 @@ def classification_metrics(frame: pd.DataFrame) -> dict[str, object]:
         if len(unique_classes) == len(labels)
         else None
     )
+    overall_accuracy = float(np.mean(truth == predicted))
+    class_accuracy = {name: float(recalls[index]) for index, name in enumerate(MODEL_CLASS_NAMES)}
     return {
         "n": int(len(frame)),
-        "accuracy": float(np.mean(truth == predicted)),
+        "accuracy": overall_accuracy,
+        "overall_accuracy": overall_accuracy,
         "balanced_accuracy": float(balanced_accuracy_score(truth, predicted)),
-        "macro_f1": float(f1_score(truth, predicted, average="macro", zero_division=0)),
+        "macro_f1": float(f1_score(truth, predicted, labels=labels, average="macro", zero_division=0)),
         "macro_ovr_roc_auc": macro_roc_auc,
         "class_counts": {name: int(np.sum(truth == index)) for index, name in enumerate(MODEL_CLASS_NAMES)},
         "predicted_class_counts": {
@@ -58,7 +61,8 @@ def classification_metrics(frame: pd.DataFrame) -> dict[str, object]:
             name: float(np.mean(predicted == index)) for index, name in enumerate(MODEL_CLASS_NAMES)
         },
         "class_f1": {name: float(class_f1[index]) for index, name in enumerate(MODEL_CLASS_NAMES)},
-        "class_recall": {name: float(recalls[index]) for index, name in enumerate(MODEL_CLASS_NAMES)},
+        "class_accuracy": class_accuracy,
+        "class_recall": class_accuracy,
         "confusion_matrix": confusion.tolist(),
     }
 
