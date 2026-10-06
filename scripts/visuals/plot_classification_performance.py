@@ -6,7 +6,8 @@ import numpy as np
 plt.switch_backend("Agg")
 
 
-OUTPUT_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
 OUTPUT_STEM = OUTPUT_DIR / "classification-performance"
 
 MODEL_NAMES = ("Baseline MLP", "ConvGRU")
