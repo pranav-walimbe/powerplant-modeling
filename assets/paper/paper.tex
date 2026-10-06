@@ -248,21 +248,23 @@ $\theta=250~\mathrm{lb\,h^{-1}}$ to assign its category:
     \end{cases}
 \end{equation}
 
-Figure~\ref{fig:sample-construction} summarizes one example sequence.
+Figure~\ref{fig:sample-construction} shows one complete five-timestep model
+input and its derived behavior label.
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
   \IfFileExists{visuals/sample-construction.pdf}{%
-      \includegraphics[width=\columnwidth]{visuals/sample-construction.pdf}%
+      \includegraphics[width=\textwidth]{visuals/sample-construction.pdf}%
   }{%
-      \fbox{\parbox[c][1.5in][c]{0.9\columnwidth}{\centering
-      \textit{Placeholder: five NO$_2$, temperature, and wind observations;}\\[0.25em]
-      \textit{three-class emissions-change label}}}
+      \fbox{\parbox[c][2.9in][c]{0.95\textwidth}{\centering
+      \textit{Placeholder: complete five-timestep raster inputs, transport residuals,}\\[0.25em]
+      \textit{and emissions-change behavior label}}}
   }
-  \caption{Example five-timestep sample.}
-  \Description{Five-timestep raster inputs and a three-class emissions-change label.}
+  \caption{Complete model inputs and behavior label for one five-timestep training sample.}
+  \Description{Five NO2, wind, and temperature rasters, four transport residuals,
+  and the associated emissions-change behavior label.}
   \label{fig:sample-construction}
-\end{figure}
+\end{figure*}
 
 \subsection{Transport Model}
 
@@ -303,23 +305,9 @@ validation data as part of the model optimization procedure described later.
 We compute one residual $R_i$ for each adjacent pair, producing four residual
 rasters per sample. We transport the earlier validity mask through the same
 advection and dispersion steps and combine it with the later mask to identify
-unreliable residual pixels. Figure~\ref{fig:transport-residuals} shows the four
-residuals for an example sequence.
-
-\begin{figure}[t]
-  \centering
-  \IfFileExists{visuals/transport-residuals.pdf}{%
-      \includegraphics[width=\columnwidth]{visuals/transport-residuals.pdf}%
-  }{%
-      \fbox{\parbox[c][1.25in][c]{0.9\columnwidth}{\centering
-      \textit{Placeholder: transport residuals for}\\[0.25em]
-      $t_0 \!\rightarrow\! t_1$, $t_1 \!\rightarrow\! t_2$,
-      $t_2 \!\rightarrow\! t_3$, and $t_3 \!\rightarrow\! t_4$}}
-  }
-  \caption{Transport residuals for a five-timestep sample.}
-  \Description{Transport residuals between consecutive observations.}
-  \label{fig:transport-residuals}
-\end{figure}
+unreliable residual pixels. The transport-residual panel in
+Figure~\ref{fig:sample-construction} shows the four adjacent-scan residuals for
+the same example sequence.
 
 \subsection{Dataset Stratification}
 
