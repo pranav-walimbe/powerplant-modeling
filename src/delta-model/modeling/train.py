@@ -40,7 +40,7 @@ from modeling.eval_utils import (
 from modeling.mlp import SeasonalMLP
 from modeling.plot_utils import (
     plot_joint_prediction_samples,
-    plot_macro_f1_by_characteristic,
+    plot_performance_by_characteristic,
     plot_split_class_accuracy,
     plot_split_class_f1,
     plot_training_curves,
@@ -1291,7 +1291,7 @@ def main() -> None:
     plot_split_class_f1(model_frames, run_dir)
     plot_split_class_accuracy(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
-    plot_macro_f1_by_characteristic(model_frames, run_dir)
+    plot_performance_by_characteristic(model_frames, run_dir)
     plot_joint_prediction_samples(*joint_sample_arrays, run_dir=run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")
 
