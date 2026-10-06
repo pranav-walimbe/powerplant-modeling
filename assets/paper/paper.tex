@@ -199,17 +199,18 @@ each AOI grid cell an NO$_2$ TVCD by averaging the TEMPO footprints that
 intersect it, weighted by their area of overlap. Figure~\ref{fig:tempoRegridding}
 illustrates this mapping from native footprints to the fixed AOI grid.
 
-\begin{figure*}[!t]
+\begin{figure}[t]
     \centering
     \IfFileExists{visuals/tempo-regridding.pdf}{%
-        \includegraphics[width=0.82\textwidth]{visuals/tempo-regridding.pdf}%
+        \includegraphics[width=0.96\columnwidth]{visuals/tempo-regridding.pdf}%
     }{%
-        \fbox{\parbox[c][1.15in][c]{0.91\textwidth}{\centering
+        \fbox{\parbox[c][1.15in][c]{0.91\columnwidth}{\centering
         Regridding schematic placeholder}}}
     \caption{TEMPO Level 2 regridding to the AOI grid.}
     \Description{TEMPO footprints mapped to the AOI grid.}
     \label{fig:tempoRegridding}
-\end{figure*}
+    \vspace{-0.8\baselineskip}
+\end{figure}
 
 A footprint contributes to the NO$_2$ average only when its main data quality
 flag equals zero and its effective cloud fraction does not exceed 0.20. Grid

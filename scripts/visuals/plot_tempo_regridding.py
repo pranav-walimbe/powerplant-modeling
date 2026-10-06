@@ -104,10 +104,10 @@ def main() -> None:
     layout = figure.add_gridspec(
         3,
         3,
-        width_ratios=(1.0, 0.24, 1.0),
+        width_ratios=(1.0, 0.14, 1.0),
         height_ratios=(1.0, 0.18, 0.06),
         hspace=0.08,
-        wspace=0.10,
+        wspace=0.02,
     )
     native_axis = figure.add_subplot(layout[0, 0])
     process_axis = figure.add_subplot(layout[0, 1])
@@ -151,18 +151,23 @@ def main() -> None:
     _format_map_axis(grid_axis, show_y_label=False)
 
     process_axis.set_axis_off()
-    process_axis.annotate(
+    process_axis.text(
+        0.50,
+        0.59,
         "area-overlap\nweighted mean",
-        xy=(0.96, 0.50),
-        xytext=(0.04, 0.50),
         ha="center",
         va="center",
-        fontsize=7.2,
+        fontsize=7.0,
+    )
+    process_axis.annotate(
+        "",
+        xy=(0.78, 0.39),
+        xytext=(0.22, 0.39),
         arrowprops={
             "arrowstyle": "-|>",
             "color": "#303030",
-            "linewidth": 1.35,
-            "mutation_scale": 12,
+            "linewidth": 1.15,
+            "mutation_scale": 10,
         },
     )
 
