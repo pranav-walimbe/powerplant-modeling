@@ -88,7 +88,7 @@ class BranchFrameEncoder(nn.Module):
 
 
 class VisionClassifier(nn.Module):
-    """Classify change from visual inputs with context at every timestep."""
+    """Classify change by fusing context after visual temporal aggregation."""
 
     def __init__(
         self,
@@ -104,12 +104,6 @@ class VisionClassifier(nn.Module):
         self.observation_encoder = BranchFrameEncoder(5, model_width)
         self.residual_encoder = BranchFrameEncoder(2, model_width)
         self.context_encoder = build_seasonal_encoder(n_features)
-        self.observation_film_projection = nn.Linear(SEASONAL_EMBEDDING_DIM, 2 * model_width)
-        self.residual_film_projection = nn.Linear(SEASONAL_EMBEDDING_DIM, 2 * model_width)
-        nn.init.zeros_(self.observation_film_projection.weight)
-        nn.init.zeros_(self.observation_film_projection.bias)
-        nn.init.zeros_(self.residual_film_projection.weight)
-        nn.init.zeros_(self.residual_film_projection.bias)
         self.branch_fusion = nn.Sequential(
             nn.Conv2d(2 * model_width, model_width, kernel_size=1, bias=False),
             _group_norm(model_width),
@@ -123,7 +117,7 @@ class VisionClassifier(nn.Module):
             nn.Dropout(dropout),
         )
         self.classifier = nn.Sequential(
-            nn.Linear(model_width, head_dim),
+            nn.Linear(model_width + SEASONAL_EMBEDDING_DIM, head_dim),
             nn.LayerNorm(head_dim),
             nn.SiLU(inplace=True),
             nn.Dropout(dropout),
@@ -161,24 +155,12 @@ class VisionClassifier(nn.Module):
         self,
         observation: torch.Tensor,
         residual: torch.Tensor,
-        observation_scale: torch.Tensor,
-        observation_shift: torch.Tensor,
-        residual_scale: torch.Tensor,
-        residual_shift: torch.Tensor,
     ) -> torch.Tensor:
         # Return the final recurrent map without synthesizing an initial residual
-        hidden = observation[:, 0] * observation_scale[:, 0, :, None, None] + observation_shift[:, 0, :, None, None]
+        hidden = observation[:, 0]
         for transition in range(residual.shape[1]):
-            observation_features = (
-                observation[:, transition + 1] * observation_scale[:, transition + 1, :, None, None]
-                + observation_shift[:, transition + 1, :, None, None]
-            )
-            residual_features = (
-                residual[:, transition] * residual_scale[:, transition, :, None, None]
-                + residual_shift[:, transition, :, None, None]
-            )
             aligned = torch.cat(
-                (observation_features, residual_features),
+                (observation[:, transition + 1], residual[:, transition]),
                 dim=1,
             )
             hidden = self.temporal_encoder(self.branch_fusion(aligned), hidden)
@@ -190,23 +172,16 @@ class VisionClassifier(nn.Module):
         peak = F.adaptive_max_pool2d(hidden, 1).flatten(1)
         return self.temporal_projection(torch.cat((average, peak), dim=1))
 
-    def _context_film(
+    def _context_embedding(
         self,
         context: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        # Keep dropout consistent across every timestep in a sample
+    ) -> torch.Tensor:
+        # Drop the complete context embedding for selected samples
         embedding = self.context_encoder(context)
         if self.training and self.context_dropout > 0.0:
-            keep = (torch.rand(context.shape[0], 1, 1, device=context.device) >= self.context_dropout).to(context.dtype)
+            keep = (torch.rand(context.shape[0], 1, device=context.device) >= self.context_dropout).to(context.dtype)
             embedding = embedding * keep
-        observation_scale_delta, observation_shift = self.observation_film_projection(embedding).chunk(2, dim=-1)
-        residual_scale_delta, residual_shift = self.residual_film_projection(embedding[:, 1:]).chunk(2, dim=-1)
-        return (
-            1.0 + observation_scale_delta,
-            observation_shift,
-            1.0 + residual_scale_delta,
-            residual_shift,
-        )
+        return embedding
 
     def forward(
         self,
@@ -222,16 +197,12 @@ class VisionClassifier(nn.Module):
             self.residual_encoder,
             transport,
         )
-        observation_scale, observation_shift, residual_scale, residual_shift = self._context_film(seasonal)
-        hidden = self._aggregate_aligned(
-            observation_features,
-            residual_features,
-            observation_scale,
-            observation_shift,
-            residual_scale,
-            residual_shift,
+        hidden = self._aggregate_aligned(observation_features, residual_features)
+        classifier_features = torch.cat(
+            (self._project_hidden(hidden), self._context_embedding(seasonal)),
+            dim=1,
         )
-        return self.classifier(self._project_hidden(hidden))
+        return self.classifier(classifier_features)
 
     def num_params(self) -> int:
         """Count trainable model parameters."""
@@ -291,14 +262,10 @@ class JointVisionClassifier(VisionClassifier):
             self.residual_encoder,
             transport,
         )
-        observation_scale, observation_shift, residual_scale, residual_shift = self._context_film(seasonal)
-        hidden = self._aggregate_aligned(
-            observation_features,
-            residual_features,
-            observation_scale,
-            observation_shift,
-            residual_scale,
-            residual_shift,
+        hidden = self._aggregate_aligned(observation_features, residual_features)
+        classifier_features = torch.cat(
+            (self._project_hidden(hidden), self._context_embedding(seasonal)),
+            dim=1,
         )
-        logits = self.classifier(self._project_hidden(hidden))
+        logits = self.classifier(classifier_features)
         return logits, self.raster_decoder(hidden).sigmoid()

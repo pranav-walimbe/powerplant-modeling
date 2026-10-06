@@ -106,7 +106,6 @@ PRETRAINED_MASKED_MODEL_WEIGHTS = os.getenv(  # masked-model checkpoint for gap 
 SEQUENCE_TIMESTEPS = 5  # five causal rasters spanning the early and late label windows
 MODEL_IMAGE_KEYS = ("no2", "temperature_2m_k", "wind_u_80m_mps", "wind_v_80m_mps")
 MODEL_MASK_KEYS = ("no2_mask",)
-MODEL_ROBUST_IMAGE_KEYS = ("no2",)
 MODEL_IMAGE_CHANNELS = len(MODEL_IMAGE_KEYS)
 MODEL_INPUT_CHANNELS = MODEL_IMAGE_CHANNELS + len(MODEL_MASK_KEYS)
 MODEL_IMAGE_CLIP_ABS = 8.0  # bound rare raster extremes after train-only normalization

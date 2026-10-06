@@ -37,10 +37,10 @@ from modeling.eval_utils import (
     classification_metrics,
     save_results,
 )
-from modeling.mlp import SeasonalMLP
+from modeling.mlp import SEASONAL_EMBEDDING_DIM, SeasonalMLP
 from modeling.plot_utils import (
     plot_joint_prediction_samples,
-    plot_macro_f1_by_characteristic,
+    plot_performance_by_characteristic,
     plot_split_class_accuracy,
     plot_split_class_f1,
     plot_training_curves,
@@ -1036,7 +1036,6 @@ def main() -> None:
             completed_raster_path=completed_paths[split],
             source_image_stats=masked_image_stats,
             transport_transform=transport_transform,
-            per_timestep_context=True,
             contribution_target_path=contribution_target_paths[split],
         )
         for split in datasets
@@ -1134,7 +1133,7 @@ def main() -> None:
         checkpoint_metadata={
             **common_checkpoint_metadata,
             "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-            "context_fusion": "scale_and_shift_film_per_timestep",
+            "context_fusion": "late_concatenation_after_temporal_pooling",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
             "model_width": args.model_width,
             "encoder_initialization": "random",
@@ -1193,7 +1192,7 @@ def main() -> None:
         "raster_loss_weight": args.raster_loss_weight,
         "contribution_target": contribution_metadata,
         "visual_fusion": "aligned_observation_and_transport_bottleneck_fusion",
-        "context_fusion": "scale_and_shift_film_per_timestep",
+        "context_fusion": "late_concatenation_after_temporal_pooling",
         "context_dropout": DEFAULT_CONTEXT_DROPOUT,
     }
     del vision_model, vision_train_loader
@@ -1243,7 +1242,7 @@ def main() -> None:
         "image_center": list(stats.image_center),
         "image_scale": list(stats.image_scale),
         "raster_normalization": "global_training_split_statistics",
-        "no2_normalization": "training_split_median_robust_scale",
+        "no2_normalization": "training_split_mean_standard_deviation",
         "weather_normalization": "training_split_mean_standard_deviation",
         "image_clip_range": [-MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS],
         "target_name": MODEL_TARGET_COL,
@@ -1252,7 +1251,7 @@ def main() -> None:
         "class_counts": {split: _class_counts(dataset) for split, dataset in datasets.items()},
         "seasonal_features": list(MODEL_FEATURE_NAMES),
         "seasonal_feature_timestamp": "sequence_midpoint_local_solar_time",
-        "vision_context_timestamps": "each_observation_local_solar_time_rounded_to_nearest_hour",
+        "vision_context_timestamps": "sequence_midpoint_local_solar_time",
         "prediction_family": "joint_three_class_and_two_channel_contribution_raster",
         "contribution_target": {
             **contribution_metadata,
@@ -1268,12 +1267,10 @@ def main() -> None:
             **transport_config.to_metadata(),
         },
         "context_fusion": {
-            "location": "branch_spatial_bottlenecks_at_each_timestep",
-            "method": "scale_and_shift_film",
-            "parameterization": "gamma_equals_one_plus_delta_gamma_beta_equals_delta_beta",
-            "initial_timestep_context": True,
-            "identity_initialized": True,
-            "additive_shift": True,
+            "location": "classification_input_after_temporal_pooling",
+            "method": "late_concatenation",
+            "context_embedding_dim": SEASONAL_EMBEDDING_DIM,
+            "context_timestamp": "sequence_midpoint_local_solar_time",
             "context_dropout": DEFAULT_CONTEXT_DROPOUT,
         },
     }
@@ -1291,7 +1288,7 @@ def main() -> None:
     plot_split_class_f1(model_frames, run_dir)
     plot_split_class_accuracy(model_frames, run_dir)
     plot_training_curves(histories, run_dir)
-    plot_macro_f1_by_characteristic(model_frames, run_dir)
+    plot_performance_by_characteristic(model_frames, run_dir)
     plot_joint_prediction_samples(*joint_sample_arrays, run_dir=run_dir)
     save_results(model_frames, run_dir, primary_model_name="vision")
 

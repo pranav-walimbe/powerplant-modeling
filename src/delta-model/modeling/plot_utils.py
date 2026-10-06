@@ -33,10 +33,10 @@ AOI_STRATA = {
 MONTH_CHARACTERISTIC = "month"
 SOLAR_HOUR_CHARACTERISTIC = "midpoint_local_solar_hour"
 CHARACTERISTIC_PANELS = (
-    ("avg_heat_input", "test", "Average heat input"),
-    ("num_units", "test", "Total unit count"),
-    (MONTH_CHARACTERISTIC, "test", "Month (test)"),
-    (SOLAR_HOUR_CHARACTERISTIC, "test", "Midpoint local solar hour (test)"),
+    ("avg_heat_input", "test", "Average heat input", "macro_f1"),
+    ("num_units", "test", "Total unit count", "macro_f1"),
+    (MONTH_CHARACTERISTIC, "test", "Month (test)", "accuracy"),
+    (SOLAR_HOUR_CHARACTERISTIC, "test", "Midpoint local solar hour (test)", "accuracy"),
 )
 
 
@@ -246,6 +246,11 @@ def _macro_f1(frame: pd.DataFrame) -> float:
     )
 
 
+def _accuracy(frame: pd.DataFrame) -> float:
+    # Calculate row-level classification accuracy
+    return float((frame[TRUE_CLASS_COL] == frame[PREDICTED_CLASS_COL]).mean())
+
+
 def _tertiles(values: pd.Series) -> pd.Series:
     # Assign equally ranked low, middle, and high groups
     percentiles = values.rank(method="average", pct=True)
@@ -267,6 +272,7 @@ def _stratum_result(
     mask: pd.Series,
     values: pd.Series,
     stratification_unit: str,
+    metric: str,
 ) -> dict[str, object]:
     # Summarize one model comparison group
     reference = next(iter(frames.values()))
@@ -275,13 +281,15 @@ def _stratum_result(
         "characteristic_label": characteristic_label,
         "split": split,
         "stratification_unit": stratification_unit,
+        "metric": metric,
         "stratum": stratum,
         "aoi_count": int(reference.loc[mask, "aoi_id"].nunique()),
         "record_count": int(mask.sum()),
         "value_min": float(values.min()),
         "value_max": float(values.max()),
     }
-    row.update({f"{model_name}_macro_f1": _macro_f1(frame.loc[mask]) for model_name, frame in frames.items()})
+    score = _macro_f1 if metric == "macro_f1" else _accuracy
+    row.update({f"{model_name}_score": score(frame.loc[mask]) for model_name, frame in frames.items()})
     return row
 
 
@@ -302,8 +310,8 @@ def _aligned_frames(
     return frames
 
 
-def _characteristic_macro_f1_table(model_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
-    # Compare model macro F1 across AOI properties, month, and midpoint solar hour
+def _characteristic_performance_table(model_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    # Compare model performance across AOI properties, month, and midpoint solar hour
     test_frames = _aligned_frames(model_frames, "test")
     test_reference = next(iter(test_frames.values()))
 
@@ -326,6 +334,7 @@ def _characteristic_macro_f1_table(model_frames: dict[str, dict[str, pd.DataFram
                     mask=mask,
                     values=aoi_values.loc[aoi_ids, column],
                     stratification_unit="AOI",
+                    metric="macro_f1",
                 )
             )
 
@@ -342,6 +351,7 @@ def _characteristic_macro_f1_table(model_frames: dict[str, dict[str, pd.DataFram
                 mask=mask,
                 values=months.loc[mask],
                 stratification_unit="record",
+                metric="accuracy",
             )
         )
 
@@ -359,30 +369,31 @@ def _characteristic_macro_f1_table(model_frames: dict[str, dict[str, pd.DataFram
                 mask=mask,
                 values=solar_hours.loc[mask],
                 stratification_unit="record",
+                metric="accuracy",
             )
         )
     return pd.DataFrame(rows)
 
 
-def plot_macro_f1_by_characteristic(
+def plot_performance_by_characteristic(
     model_frames: dict[str, dict[str, pd.DataFrame]],
     run_dir: str | Path,
 ) -> None:
-    """Plot macro F1 by test AOI characteristics, month, and midpoint solar hour.
+    """Plot test performance by AOI characteristics, month, and midpoint solar hour.
 
     Args:
         model_frames: Row-level predictions by model and split.
         run_dir: Model-run output directory.
     """
-    table = _characteristic_macro_f1_table(model_frames)
-    table.to_csv(Path(run_dir) / "macro_f1_by_characteristic.csv", index=False)
+    table = _characteristic_performance_table(model_frames)
+    table.to_csv(Path(run_dir) / "performance_by_characteristic.csv", index=False)
     sns.set_theme(style="whitegrid", font_scale=0.95)
     columns = 2
     rows = int(np.ceil(len(CHARACTERISTIC_PANELS) / columns))
     figure, axes = plt.subplots(rows, columns, figsize=(13, 5 * rows), sharey=True, squeeze=False)
     flat_axes = axes.ravel()
     models = _available_models(model_frames)
-    for axis, (column, split, display_name) in zip(flat_axes, CHARACTERISTIC_PANELS, strict=True):
+    for axis, (column, split, display_name, metric) in zip(flat_axes, CHARACTERISTIC_PANELS, strict=True):
         subset = table.loc[(table["characteristic"] == column) & (table["split"] == split)]
         if column in AOI_STRATA:
             subset = subset.set_index("stratum").reindex(STRATUM_ORDER).reset_index()
@@ -392,7 +403,7 @@ def plot_macro_f1_by_characteristic(
         for model_name in models:
             axis.plot(
                 positions,
-                subset[f"{model_name}_macro_f1"].to_numpy(dtype=np.float64),
+                subset[f"{model_name}_score"].to_numpy(dtype=np.float64),
                 marker="o",
                 linewidth=2,
                 color=MODEL_COLORS[model_name],
@@ -413,18 +424,18 @@ def plot_macro_f1_by_characteristic(
         axis.set(
             title=display_name,
             xlabel=x_label,
-            ylabel=f"{split.title()} macro F1",
+            ylabel=f"{split.title()} {'macro F1' if metric == 'macro_f1' else 'accuracy'}",
             xticks=positions,
             xticklabels=tick_labels,
             ylim=(0, 1.05),
         )
     flat_axes[0].legend(loc="lower right", fontsize=8)
     figure.suptitle(
-        "Model macro F1 by AOI characteristic, calendar month, and midpoint solar hour",
+        "Model performance by AOI characteristic, calendar month, and midpoint solar hour",
         fontsize=16,
     )
     figure.tight_layout()
-    _save(figure, run_dir, "macro_f1_by_characteristic")
+    _save(figure, run_dir, "performance_by_characteristic")
 
 
 def plot_joint_prediction_samples(

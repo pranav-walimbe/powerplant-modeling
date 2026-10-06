@@ -14,16 +14,15 @@ mask, so it can distinguish observations from filled values.
 | Observation sequence | Five frames at `24 x 24` pixels |
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
-| Seasonal context | Midpoint solar hour for the baseline; per-timestep solar hour for vision |
+| Seasonal context | Midpoint day of year and local solar hour |
 | Loss | Weighted class cross-entropy plus two-channel unbalanced Sinkhorn divergence |
 | Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
-The seasonal baseline uses context at the midpoint between the first and fifth
-TEMPO scans. The vision model uses context at all five observation timestamps.
-It converts UTC to local solar time with longitude, rounds vision-model hours
-to the nearest whole hour, and normalizes the four cyclic features with
-training-split statistics.
+Both models use context at the midpoint between the first and fifth TEMPO
+scans. The pipeline represents day of year and local solar hour with sine and
+cosine pairs, then normalizes those four features with training-split
+statistics.
 
 ## Raster completion and quality
 
@@ -34,11 +33,11 @@ receive quality 1; filled pixels receive quality 0. The classifier processes
 every filled value and uses quality as a separate input channel.
 
 The masked model's checkpoint statistics are used only during raster
-completion. The pipeline fits a global median and robust scale to
-training-split NO2. It also fits global means and standard deviations to
-training-split temperature and wind. The completed train, validation, and test
-rasters are converted from the masked model's normalized space into this
-frozen classifier normalization.
+completion. The classifier pipeline fits a global mean and population
+standard deviation to every raster channel, including NO2, using only the
+training split. The completed train, validation, and test rasters are converted
+from the masked model's normalized space into this frozen classifier
+normalization.
 
 ## Transport residuals
 
@@ -67,21 +66,18 @@ The training job fits these models:
 - `seasonal`: the context-only MLP diagnostic;
 - `vision`: the joint context-aware class and contribution-raster predictor.
 
-The observation branch processes five frames. The residual branch processes
-four transitions. A shared MLP encodes solar-hour sine/cosine and day-of-year
-sine/cosine at each observation timestamp. Separate zero-initialized heads
-produce bounded channel-wise scale and shift values for the observation and
-residual spatial bottlenecks. The first observation is modulated with its own
-context and initializes the temporal state without a synthetic residual. Each
-later observation and aligned residual are modulated with that timestep's
-context, fused with a `1 x 1` projection, and passed into the shared ConvGRU.
-The classifier pools the final recurrent map. A separate decoder upsamples the
-same map into bounded `24 x 24` decrease and increase contribution rasters.
-The model width is 64.
+The observation branch processes five frames, while the residual branch
+processes four transitions without creating a synthetic first residual. Each
+later observation embedding is fused with its aligned residual embedding by a
+`1 x 1` projection before the shared ConvGRU. The classifier pools the final
+recurrent map. A small MLP encodes the sample's midpoint context once, and its
+embedding is concatenated with the pooled visual embedding immediately before
+classification. A separate decoder upsamples only the visual map into bounded
+`24 x 24` decrease and increase contribution rasters. The model width is 64.
 
-This is identity-initialized FiLM with unbounded scale and additive shift.
-Training drops the full context sequence for a random share of samples. The
-job also saves predictions and metrics from shuffled-context inference.
+Training drops the complete midpoint context embedding for a random share of
+samples. The job also saves predictions and metrics from shuffled-context
+inference.
 
 ## Spatial contribution targets
 
@@ -174,8 +170,9 @@ The trainer produces five figures:
 - `split_class_accuracy.png` compares overall and per-class accuracy with class
   support for every split;
 - `training_curves.png` shows train and validation loss;
-- `macro_f1_by_characteristic.png` compares test macro F1 by AOI heat input,
-  unit count, calendar month, and midpoint local solar hour;
+- `performance_by_characteristic.png` compares test macro F1 by AOI heat input
+  and unit count, plus test accuracy by calendar month and midpoint local solar
+  hour;
 - `joint_prediction_samples.png` shows 20 deterministic, class-balanced test
   examples ordered from strongest NOx decrease to strongest increase. It includes
   all five NO2 inputs, four transport residuals, the true class, and both true

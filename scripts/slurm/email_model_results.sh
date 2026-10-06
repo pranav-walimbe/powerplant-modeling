@@ -15,7 +15,7 @@ mail_log="/var/log/maillog"
 class_f1_plot="${run_dir}/split_class_f1.png"
 class_accuracy_plot="${run_dir}/split_class_accuracy.png"
 loss_plot="${run_dir}/training_curves.png"
-characteristic_plot="${run_dir}/macro_f1_by_characteristic.png"
+characteristic_plot="${run_dir}/performance_by_characteristic.png"
 joint_samples_plot="${run_dir}/joint_prediction_samples.png"
 
 for artifact in \

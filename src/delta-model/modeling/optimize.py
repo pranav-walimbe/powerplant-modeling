@@ -188,7 +188,6 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
                 completed_raster_path=completed_paths[split],
                 source_image_stats=masked_image_stats,
                 transport_transform=transport_transform,
-                per_timestep_context=True,
                 contribution_target_path=target_paths[split],
             )
             for split in ("train", "val")
