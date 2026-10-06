@@ -25,7 +25,6 @@ from config import (
     MODEL_IMAGE_CLIP_ABS,
     MODEL_IMAGE_KEYS,
     MODEL_MASK_KEYS,
-    MODEL_ROBUST_IMAGE_KEYS,
     MODEL_SEASONAL_FEATURES,
     MODEL_TARGET_COL,
     SEQUENCE_TIMESTEPS,
@@ -34,11 +33,6 @@ from config import (
 RASTER_PATH_COL = "raster_bundle_path"
 NO2_CHANNEL = MODEL_IMAGE_KEYS.index("no2")
 MIN_SCALE = 1e-12
-ROBUST_STD_NORMALIZER = 1.349
-ROBUST_IMAGE_CHANNELS = tuple(MODEL_IMAGE_KEYS.index(name) for name in MODEL_ROBUST_IMAGE_KEYS)
-STANDARD_IMAGE_CHANNELS = tuple(
-    channel for channel in range(len(MODEL_IMAGE_KEYS)) if channel not in ROBUST_IMAGE_CHANNELS
-)
 DEGREES_PER_SOLAR_HOUR = 15.0
 SECONDS_PER_DAY = 86_400.0
 TIMESTEP_TIME_COLUMNS = tuple(f"t{index}_timestamp" for index in range(SEQUENCE_TIMESTEPS))
@@ -344,18 +338,6 @@ def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
     return _cyclic_feature_matrix(_midpoint_local_time(frame))
 
 
-def _timestep_feature_matrix(frame: pd.DataFrame) -> np.ndarray:
-    # Round each observation's local solar time before cyclic encoding
-    longitude = pd.to_numeric(frame["lon"], errors="coerce")
-    solar_offset = pd.to_timedelta(longitude / DEGREES_PER_SOLAR_HOUR, unit="h")
-    timestep_features = []
-    for column in TIMESTEP_TIME_COLUMNS:
-        utc_time = pd.to_datetime(frame[column], errors="coerce", utc=True)
-        rounded_solar_time = (utc_time + solar_offset + pd.Timedelta(minutes=30)).dt.floor("h")
-        timestep_features.append(_cyclic_feature_matrix(rounded_solar_time))
-    return np.stack(timestep_features, axis=1)
-
-
 def _raster_path(serialized_path: object, dataset_dir: Path) -> Path:
     # Resolve a stored raster path against the dataset root
     path = Path(str(serialized_path))
@@ -413,7 +395,7 @@ def _update_moments(
 
 
 def _fit_image_stats(raster_paths: np.ndarray, root: Path, progress_interval: int) -> tuple[np.ndarray, ...]:
-    # Count valid pixels everywhere and accumulate moments for the standardized channels
+    # Accumulate train-split moments for every numeric raster channel
     channel_count = len(MODEL_IMAGE_KEYS)
     count = np.zeros(channel_count, dtype=np.int64)
     mean = np.zeros(channel_count, dtype=np.float64)
@@ -422,57 +404,22 @@ def _fit_image_stats(raster_paths: np.ndarray, root: Path, progress_interval: in
         rasters = _load_rasters(_raster_path(serialized_path, root))
         for channel in range(channel_count):
             values = _valid_channel_values(rasters, channel)
-            if channel in STANDARD_IMAGE_CHANNELS:
-                mean[channel], sum_squared_deviation[channel] = _update_moments(
-                    values.astype(np.float64, copy=False),
-                    int(count[channel]),
-                    float(mean[channel]),
-                    float(sum_squared_deviation[channel]),
-                )
+            mean[channel], sum_squared_deviation[channel] = _update_moments(
+                values.astype(np.float64, copy=False),
+                int(count[channel]),
+                float(mean[channel]),
+                float(sum_squared_deviation[channel]),
+            )
             count[channel] += values.size
         if progress_interval > 0 and (index % progress_interval == 0 or index == len(raster_paths)):
             print(f"Image-statistics scan: {index:,}/{len(raster_paths):,} rasters")
 
     center = mean.copy()
     scale = np.ones(channel_count, dtype=np.float64)
-    for channel in STANDARD_IMAGE_CHANNELS:
+    for channel in range(channel_count):
         if count[channel] > 0:
             scale[channel] = np.sqrt(sum_squared_deviation[channel] / count[channel])
-    for channel, (channel_center, channel_scale) in _fit_robust_image_stats(raster_paths, root, count).items():
-        center[channel] = channel_center
-        scale[channel] = channel_scale
     return center, _safe_scale(scale), count
-
-
-def _fit_robust_image_stats(raster_paths: np.ndarray, root: Path, count: np.ndarray) -> dict[int, tuple[float, float]]:
-    # Pool valid NO2 pixels to derive a median and robust standard deviation per channel
-    channels = tuple(channel for channel in ROBUST_IMAGE_CHANNELS if count[channel] > 0)
-    if not channels:
-        return {}
-    with tempfile.TemporaryDirectory(prefix=".no2-quantiles-") as temporary_dir:
-        pooled = {
-            channel: np.memmap(
-                Path(temporary_dir) / f"channel-{channel}.bin",
-                dtype=np.float32,
-                mode="w+",
-                shape=(int(count[channel]),),
-            )
-            for channel in channels
-        }
-        offsets = dict.fromkeys(channels, 0)
-        for serialized_path in raster_paths:
-            rasters = _load_rasters(_raster_path(serialized_path, root))
-            for channel, destination in pooled.items():
-                values = _valid_channel_values(rasters, channel)
-                stop = offsets[channel] + values.size
-                destination[offsets[channel] : stop] = values
-                offsets[channel] = stop
-        robust = {}
-        for channel, values in pooled.items():
-            lower, median, upper = np.percentile(values, (25, 50, 75), overwrite_input=True)
-            robust[channel] = (float(median), float(upper - lower) / ROBUST_STD_NORMALIZER)
-        del pooled
-    return robust
 
 
 def compute_stats(
@@ -591,7 +538,6 @@ class NOxDataset(Dataset):
         completed_raster_path: str | Path | None = None,
         source_image_stats: dict[str, object] | None = None,
         transport_transform: TransportTransform | None = None,
-        per_timestep_context: bool = False,
         contribution_target_path: str | Path | None = None,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
@@ -599,7 +545,6 @@ class NOxDataset(Dataset):
         self.load_images = load_images
         self.completed_raster_path = Path(completed_raster_path) if completed_raster_path else None
         self.transport_transform = transport_transform
-        self.per_timestep_context = per_timestep_context
         self._completed_rasters: np.ndarray | None = None
         self.contribution_target_path = Path(contribution_target_path) if contribution_target_path else None
         self._contribution_targets: np.ndarray | None = None
@@ -618,9 +563,7 @@ class NOxDataset(Dataset):
             (len(self.frame), 2),
         ).copy()
 
-        raw_features = (
-            _timestep_feature_matrix(self.frame) if self.per_timestep_context else _feature_matrix(self.frame)
-        )
+        raw_features = _feature_matrix(self.frame)
         feature_mean = np.asarray(self.stats.feature_mean, dtype=np.float64)
         feature_std = np.asarray(self.stats.feature_std, dtype=np.float64)
         self.features = ((raw_features - feature_mean) / feature_std).astype(np.float32)
