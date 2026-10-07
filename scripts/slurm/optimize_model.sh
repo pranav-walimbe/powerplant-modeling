@@ -59,6 +59,7 @@ export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
 
 srun python -u -m modeling.optimize \
     --device cuda \
+    --fill-reconstruct \
     --completed-raster-dir "${node_work_dir}/filled-rasters" \
     --trials "${HPO_TRIALS:-24}" \
     --batch-size 128 \

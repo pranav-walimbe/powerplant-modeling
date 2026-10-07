@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import random
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from modeling.eval_utils import (
     classification_metrics,
     save_results,
 )
+from modeling.interpolation import bilinear_interpolation_fill
 from modeling.mlp import SEASONAL_EMBEDDING_DIM, SeasonalMLP
 from modeling.plot_utils import (
     plot_performance_by_characteristic,
@@ -96,6 +98,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scheduler-patience", type=int, default=DEFAULT_SCHEDULER_PATIENCE)
     parser.add_argument("--scheduler-factor", type=float, default=DEFAULT_SCHEDULER_FACTOR)
     parser.add_argument("--early-stop-patience", type=int, default=DEFAULT_EARLY_STOP_PATIENCE)
+    fill_group = parser.add_mutually_exclusive_group(required=True)
+    fill_group.add_argument("--fill-interpolate", dest="fill_method", action="store_const", const="interpolate")
+    fill_group.add_argument("--fill-reconstruct", dest="fill_method", action="store_const", const="reconstruct")
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -318,13 +323,51 @@ def _load_masked_checkpoint(path: Path, device: torch.device) -> tuple[dict[str,
     return checkpoint, model
 
 
+def _configure_fill(
+    args: argparse.Namespace,
+    stats: NormalizationStats,
+    device: torch.device,
+) -> tuple[
+    Callable[[torch.Tensor], torch.Tensor],
+    dict[str, object],
+    torch.device,
+    dict[str, object],
+]:
+    # Select the requested missing-pixel completion strategy
+    if args.fill_method == "interpolate":
+        return (
+            bilinear_interpolation_fill,
+            stats.to_dict(),
+            torch.device("cpu"),
+            {
+                "method": "bilinear_interpolation",
+                "normalization": "classifier_training_split",
+            },
+        )
+
+    checkpoint_path = Path(args.pretrained_masked_model_weights)
+    checkpoint, model = _load_masked_checkpoint(checkpoint_path, device)
+    return (
+        model.fill_missing,
+        checkpoint["normalization_stats"],
+        device,
+        {
+            "method": "masked_reconstruction",
+            "normalization": "masked_checkpoint",
+            "pretrained_masked_model_weights": str(checkpoint_path),
+            "pretrained_masked_model_sha256": _checkpoint_sha256(checkpoint_path),
+        },
+    )
+
+
 def _fill_missing_rasters(
-    model: MaskedNO2Autoencoder,
+    fill_missing: Callable[[torch.Tensor], torch.Tensor],
     datasets: dict[str, NOxDataset],
     *,
     output_dir: Path,
     args: argparse.Namespace,
     device: torch.device,
+    fill_label: str,
 ) -> dict[str, Path]:
     # Materialize completed rasters and their original NO2 quality channel
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -340,7 +383,7 @@ def _fill_missing_rasters(
                 batch_size, timesteps, channels, height, width = image.shape
                 frames = image.reshape(batch_size * timesteps, channels, height, width)
                 with torch.autocast(device_type=device.type, enabled=amp_enabled):
-                    completed_no2 = model.fill_missing(frames)
+                    completed_no2 = fill_missing(frames)
                 completed_frames = frames[:, :MODEL_INPUT_CHANNELS].clone()
                 completed_frames[:, :1] = completed_no2
                 completed = completed_frames.reshape(
@@ -360,7 +403,7 @@ def _fill_missing_rasters(
                     )
                 destination[indices.numpy()] = completed
                 if batch_number % 100 == 0 or batch_number == len(loader):
-                    print(f"Masked fill {split}: {batch_number:,}/{len(loader):,} batches")
+                    print(f"{fill_label.title()} fill {split}: {batch_number:,}/{len(loader):,} batches")
             if destination is None:
                 raise ValueError(f"Cannot fill empty {split} split")
             destination.flush()
@@ -496,10 +539,6 @@ def main() -> None:
     completed_root = Path(args.completed_raster_dir).resolve()
     if Path("/tmp") not in completed_root.parents:
         raise ValueError("Completed raster directory must be under job-local /tmp")
-    masked_checkpoint_path = Path(args.pretrained_masked_model_weights)
-    if not args.pretrained_masked_model_weights:
-        raise ValueError("Set PRETRAINED_MASKED_MODEL_WEIGHTS or pass --pretrained-masked-model-weights")
-
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_name = f"classification_only_zscore_{timestamp}"
     run_dir = Path(RUNS_DIR) / run_name
@@ -507,25 +546,23 @@ def main() -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=False)
     print(f"Training seasonal and vision classifiers on {device}; outputs: {run_dir}")
 
-    masked_model_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
-    masked_image_stats = masked_model_checkpoint["normalization_stats"]
     stats = compute_stats("train")
-    del masked_model_checkpoint
     save_stats(stats, run_dir / "normalization_stats.json")
+    fill_missing, fill_image_stats, fill_device, fill_metadata = _configure_fill(args, stats, device)
 
     source_datasets = {
-        split: NOxDataset(split, stats, source_image_stats=masked_image_stats) for split in ("train", "val", "test")
+        split: NOxDataset(split, stats, source_image_stats=fill_image_stats) for split in ("train", "val", "test")
     }
-    masked_checkpoint_sha256 = _checkpoint_sha256(masked_checkpoint_path)
     completed_dir = completed_root / run_name
     completed_paths = _fill_missing_rasters(
-        imputation_model,
+        fill_missing,
         source_datasets,
         output_dir=completed_dir,
         args=args,
-        device=device,
+        device=fill_device,
+        fill_label=args.fill_method,
     )
-    del imputation_model, source_datasets
+    del fill_missing, source_datasets
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -534,7 +571,7 @@ def main() -> None:
             split,
             stats,
             completed_raster_path=completed_paths[split],
-            source_image_stats=masked_image_stats,
+            source_image_stats=fill_image_stats,
         )
         for split in ("train", "val", "test")
     }
@@ -559,7 +596,7 @@ def main() -> None:
             split,
             stats,
             completed_raster_path=completed_paths[split],
-            source_image_stats=masked_image_stats,
+            source_image_stats=fill_image_stats,
             transport_transform=transport_transform,
         )
         for split in datasets
@@ -581,7 +618,8 @@ def main() -> None:
         "target_name": MODEL_TARGET_COL,
         "class_names": MODEL_CLASS_NAMES,
         "sequence_timesteps": SEQUENCE_TIMESTEPS,
-        "pretrained_masked_model_sha256": masked_checkpoint_sha256,
+        "pixel_fill": fill_metadata,
+        "pretrained_masked_model_sha256": fill_metadata.get("pretrained_masked_model_sha256"),
         "raster_normalization": "training_split_zscore",
         "loss": "training_prevalence_weighted_hard_cross_entropy",
         "class_weights": class_weights,
@@ -729,9 +767,12 @@ def main() -> None:
         "scheduler_patience": args.scheduler_patience,
         "scheduler_factor": args.scheduler_factor,
         "early_stop_patience": args.early_stop_patience,
-        "pretrained_masked_model_weights": str(masked_checkpoint_path),
-        "pretrained_masked_model_sha256": masked_checkpoint_sha256,
-        "pretrained_masked_model_role": "missing_pixel_completion_only",
+        "pixel_fill": fill_metadata,
+        "pretrained_masked_model_weights": fill_metadata.get("pretrained_masked_model_weights"),
+        "pretrained_masked_model_sha256": fill_metadata.get("pretrained_masked_model_sha256"),
+        "pretrained_masked_model_role": (
+            "missing_pixel_completion_only" if args.fill_method == "reconstruct" else None
+        ),
         "encoder_initialization": "random",
         "completed_raster_paths": {split: str(path) for split, path in completed_paths.items()},
         "completed_raster_keys": list(MODEL_IMAGE_KEYS + MODEL_MASK_KEYS),

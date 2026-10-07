@@ -134,6 +134,11 @@ Run the production workflow with:
 sbatch scripts/slurm/train_model.sh
 ```
 
+The training CLI requires exactly one missing-pixel strategy. Use
+`--fill-interpolate` for bilinear interpolation in the classifier's
+training-split normalization or `--fill-reconstruct` for the pretrained masked
+model using the normalization statistics stored in its checkpoint.
+
 ## Hyperparameter optimization
 
 `modeling.optimize` runs a seeded TPE search with median pruning.

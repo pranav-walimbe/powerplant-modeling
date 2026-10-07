@@ -30,13 +30,12 @@ from modeling.train import (
     DEFAULT_SEED,
     DEFAULT_SINKHORN_ITERATIONS,
     DEFAULT_WORKERS,
-    _checkpoint_sha256,
     _class_counts,
     _class_weights,
+    _configure_fill,
     _device,
     _fill_missing_rasters,
     _fit_transport_residual_stats,
-    _load_masked_checkpoint,
     _loader,
     _seed_everything,
     fit_joint_model,
@@ -73,7 +72,7 @@ class _PreparedSearch:
     normalization_stats: NormalizationStats
     transport_config: TransportConfig
     transport_residual_stats: dict[str, float]
-    masked_checkpoint_sha256: str
+    fill_metadata: dict[str, object]
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,6 +90,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=min(DEFAULT_WORKERS, NUM_CORES))
     parser.add_argument("--prefetch-factor", type=int, default=DEFAULT_PREFETCH_FACTOR)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    fill_group = parser.add_mutually_exclusive_group(required=True)
+    fill_group.add_argument("--fill-interpolate", dest="fill_method", action="store_const", const="interpolate")
+    fill_group.add_argument("--fill-reconstruct", dest="fill_method", action="store_const", const="reconstruct")
     parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -123,27 +125,23 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
     completed_root = Path(args.completed_raster_dir).resolve()
     if Path("/tmp") not in completed_root.parents:
         raise ValueError("Completed raster directory must be under job-local /tmp")
-    if not args.pretrained_masked_model_weights:
-        raise ValueError("Set PRETRAINED_MASKED_MODEL_WEIGHTS or pass --pretrained-masked-model-weights")
-    masked_checkpoint_path = Path(args.pretrained_masked_model_weights)
-    masked_checkpoint, imputation_model = _load_masked_checkpoint(masked_checkpoint_path, device)
-    masked_image_stats = masked_checkpoint["normalization_stats"]
-    masked_checkpoint_sha256 = _checkpoint_sha256(masked_checkpoint_path)
     stats = compute_stats("train")
     save_stats(stats, study_dir / "normalization_stats.json")
+    fill_missing, fill_image_stats, fill_device, fill_metadata = _configure_fill(args, stats, device)
 
     source_datasets = {
-        split: NOxDataset(split, stats, source_image_stats=masked_image_stats) for split in ("train", "val")
+        split: NOxDataset(split, stats, source_image_stats=fill_image_stats) for split in ("train", "val")
     }
     completed_dir = completed_root / study_dir.name
     completed_paths = _fill_missing_rasters(
-        imputation_model,
+        fill_missing,
         source_datasets,
         output_dir=completed_dir,
         args=args,
-        device=device,
+        device=fill_device,
+        fill_label=args.fill_method,
     )
-    del imputation_model, masked_checkpoint
+    del fill_missing
     if device.type == "cuda":
         torch.cuda.empty_cache()
     target_paths_by_sigma = {
@@ -160,7 +158,7 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
             split,
             stats,
             completed_raster_path=completed_paths[split],
-            source_image_stats=masked_image_stats,
+            source_image_stats=fill_image_stats,
         )
         for split in ("train", "val")
     }
@@ -186,7 +184,7 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
                 split,
                 stats,
                 completed_raster_path=completed_paths[split],
-                source_image_stats=masked_image_stats,
+                source_image_stats=fill_image_stats,
                 transport_transform=transport_transform,
                 contribution_target_path=target_paths[split],
             )
@@ -231,8 +229,9 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
             "residual_normalization": transport_residual_stats,
             **transport_config.to_metadata(),
         },
-        "pretrained_masked_model_weights": str(masked_checkpoint_path),
-        "pretrained_masked_model_sha256": masked_checkpoint_sha256,
+        "pixel_fill": fill_metadata,
+        "pretrained_masked_model_weights": fill_metadata.get("pretrained_masked_model_weights"),
+        "pretrained_masked_model_sha256": fill_metadata.get("pretrained_masked_model_sha256"),
     }
     with (study_dir / "search_config.json").open("w") as destination:
         json.dump(search_config, destination, indent=2)
@@ -242,7 +241,7 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
         normalization_stats=stats,
         transport_config=transport_config,
         transport_residual_stats=transport_residual_stats,
-        masked_checkpoint_sha256=masked_checkpoint_sha256,
+        fill_metadata=fill_metadata,
     )
 
 
@@ -320,7 +319,10 @@ def _objective(
                 "target_name": MODEL_TARGET_COL,
                 "class_names": MODEL_CLASS_NAMES,
                 "sequence_timesteps": SEQUENCE_TIMESTEPS,
-                "pretrained_masked_model_sha256": prepared.masked_checkpoint_sha256,
+                "pixel_fill": prepared.fill_metadata,
+                "pretrained_masked_model_sha256": prepared.fill_metadata.get(
+                    "pretrained_masked_model_sha256"
+                ),
                 "transport_residual_stats": prepared.transport_residual_stats,
                 "transport_config": prepared.transport_config.to_metadata(),
                 "contribution_target": contribution_target_metadata(sigma),

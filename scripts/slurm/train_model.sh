@@ -51,6 +51,7 @@ export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
 
 srun python -u -m modeling.train \
     --device cuda \
+    --fill-reconstruct \
     --completed-raster-dir "${node_work_dir}/filled-rasters" \
     --batch-size 128 \
     --epochs 100 \
