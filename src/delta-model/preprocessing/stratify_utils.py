@@ -865,6 +865,7 @@ def optimize_cluster_assignments(
     cluster_counts: pl.DataFrame,
     split_fractions: dict[str, float],
     target_columns: tuple[str, ...],
+    median_indicator_columns: tuple[tuple[str, str], ...] = (),
 ) -> pl.DataFrame:
     """Assign geographic clusters by minimizing normalized target deviations.
 
@@ -873,6 +874,8 @@ def optimize_cluster_assignments(
             numeric target columns.
         split_fractions: Ordered split names and desired fractions.
         target_columns: Count columns to balance across the splits.
+        median_indicator_columns: Pairs of per-cluster counts at or below and
+            at or above a fixed target median.
 
     Returns:
         One split assignment for each cluster.
@@ -899,7 +902,8 @@ def optimize_cluster_assignments(
     upper_bounds = np.full(variable_count, np.inf, dtype=np.float64)
     upper_bounds[:assignment_variable_count] = 1.0
 
-    constraint_count = cluster_count + split_count + 2 * split_count * metric_count
+    median_constraint_count = 2 * split_count * len(median_indicator_columns)
+    constraint_count = cluster_count + split_count + 2 * split_count * metric_count + median_constraint_count
     coefficients = np.zeros((constraint_count, variable_count), dtype=np.float64)
     constraint_lower = np.full(constraint_count, -np.inf, dtype=np.float64)
     constraint_upper = np.full(constraint_count, np.inf, dtype=np.float64)
@@ -928,6 +932,21 @@ def optimize_cluster_assignments(
             coefficients[constraint_index, assignment_indices] = -normalized_values
             coefficients[constraint_index, deviation_index] = -1.0
             constraint_upper[constraint_index] = -1.0
+            constraint_index += 1
+    for split_index in range(split_count):
+        assignment_indices = np.arange(split_index, assignment_variable_count, split_count)
+        for at_or_below_column, at_or_above_column in median_indicator_columns:
+            at_or_below_margin = np.array(
+                [2 * float(cluster[at_or_below_column]) - float(cluster["aois"]) for cluster in cluster_rows]
+            )
+            coefficients[constraint_index, assignment_indices] = at_or_below_margin
+            constraint_lower[constraint_index] = 1.0
+            constraint_index += 1
+            at_or_above_margin = np.array(
+                [2 * float(cluster[at_or_above_column]) - float(cluster["aois"]) for cluster in cluster_rows]
+            )
+            coefficients[constraint_index, assignment_indices] = at_or_above_margin
+            constraint_lower[constraint_index] = 1.0
             constraint_index += 1
 
     result = milp(

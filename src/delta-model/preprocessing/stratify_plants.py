@@ -164,6 +164,7 @@ def parse_args() -> argparse.Namespace:
 
 def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
     # Preserve the training allocation before class-balancing held-out clusters
+    aoi_unit_counts = frame.select("cluster", AOI_ID_COL, "num_units").unique(subset=[AOI_ID_COL])
     cluster_counts = (
         frame.group_by("cluster")
         .agg(
@@ -188,10 +189,23 @@ def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
         on="cluster",
         how="inner",
     )
+    held_out_aoi_units = aoi_unit_counts.join(
+        held_out_counts.select("cluster"),
+        on="cluster",
+        how="inner",
+        validate="m:1",
+    )
+    target_unit_median = float(held_out_aoi_units["num_units"].median())
+    unit_median_counts = held_out_aoi_units.group_by("cluster").agg(
+        (pl.col("num_units") <= target_unit_median).sum().alias("units_at_or_below_median"),
+        (pl.col("num_units") >= target_unit_median).sum().alias("units_at_or_above_median"),
+    )
+    held_out_counts = held_out_counts.join(unit_median_counts, on="cluster", how="inner", validate="1:1")
     held_out_assignments = optimize_cluster_assignments(
         held_out_counts,
         {"val": 0.5, "test": 0.5},
         ("records", "aois", *CLASS_NAMES),
+        median_indicator_columns=(("units_at_or_below_median", "units_at_or_above_median"),),
     )
     assignments = pl.concat((train_assignments, held_out_assignments))
     splits = {
@@ -207,10 +221,12 @@ def _split_by_cluster(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
         aoi_count = split_frame[AOI_ID_COL].n_unique()
         class_counts = dict(split_frame.group_by(DELTA_CATEGORY_COL).len().iter_rows())
         class_summary = ", ".join(f"{name}={class_counts.get(name, 0):,}" for name in CLASS_NAMES)
+        unit_median = split_frame.select(AOI_ID_COL, "num_units").unique(subset=[AOI_ID_COL])["num_units"].median()
         print(
             f"[{split}] assigned {split_frame.height:,}/{frame.height:,} eligible records "
             f"({split_frame.height / frame.height:.1%}) and {aoi_count:,}/{int(total_aois):,} AOIs "
-            f"({aoi_count / total_aois:.1%}); target {SPLIT_FRACTIONS[split]:.1%} for both; {class_summary}"
+            f"({aoi_count / total_aois:.1%}); target {SPLIT_FRACTIONS[split]:.1%} for both; "
+            f"median units/AOI={unit_median:g}; {class_summary}"
         )
     return splits
 

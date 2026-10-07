@@ -292,7 +292,7 @@ def _add_sample_target(figure: plt.Figure, label: str, nox_delta: float) -> None
     header_axis.text(
         0.500,
         0.65,
-        rf"Behavior Class: $\mathbf{{{label.upper()}}}$ (NO$_x$ delta: {nox_delta:+.1f} lb/hr)",
+        f"Behavior Class: {label.capitalize()} (NO$_x$ delta: {nox_delta:+.1f} lb/hr)",
         ha="center",
         va="center",
         fontsize=8.0,
@@ -308,16 +308,22 @@ def _plot_temporal_features(figure: plt.Figure) -> None:
     axis.set_title("(e) Tabular temporal\nfeatures", fontsize=7.2, fontweight="normal", pad=4)
     bracket_color = "#4A4A4A"
     bracket_width = 0.9
-    axis.plot((0.20, 0.20), (0.29, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.20, 0.25), (0.67, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.20, 0.25), (0.29, 0.29), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.80, 0.80), (0.29, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.75, 0.80), (0.67, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.75, 0.80), (0.29, 0.29), color=bracket_color, linewidth=bracket_width)
-    axis.text(0.50, 0.61, "local solar hour", ha="center", va="center", fontsize=6.8)
-    axis.text(0.50, 0.555, "(sin/cos)", ha="center", va="center", fontsize=6.8)
-    axis.text(0.50, 0.405, "day of year", ha="center", va="center", fontsize=6.8)
-    axis.text(0.50, 0.350, "(sin/cos)", ha="center", va="center", fontsize=6.8)
+    bracket_bottom = 0.37
+    bracket_top = 0.61
+    axis.plot((0.06, 0.06), (bracket_bottom, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.06, 0.10), (bracket_top, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.06, 0.10), (bracket_bottom, bracket_bottom), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.94, 0.94), (bracket_bottom, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.90, 0.94), (bracket_top, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.90, 0.94), (bracket_bottom, bracket_bottom), color=bracket_color, linewidth=bracket_width)
+    feature_labels = (
+        "sin(local solar hour)",
+        "cos(local solar hour)",
+        "sin(day of year)",
+        "cos(day of year)",
+    )
+    for position, feature_label in zip((0.575, 0.520, 0.465, 0.410), feature_labels, strict=True):
+        axis.text(0.50, position, feature_label, ha="center", va="center", fontsize=5.8)
 
 
 def main() -> None:
