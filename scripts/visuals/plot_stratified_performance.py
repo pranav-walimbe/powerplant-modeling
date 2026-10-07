@@ -22,7 +22,7 @@ OUTPUT_STEMS = (
     OUTPUT_DIR / "stratified-performance-aoi-nox",
     OUTPUT_DIR / "stratified-performance-census-region",
 )
-RUN_DIR = Path("/global/home/users/pranavwalimbe/model_runs/classification_only_zscore_20261006_202419")
+RUN_DIR = Path("/global/home/users/pranavwalimbe/model_runs/classification_only_zscore_20261007_202105")
 
 MODEL_NAMES = ("Baseline MLP", "ConvGRU")
 MODEL_FILES = ("seasonal_test_predictions.csv", "test_predictions.csv")
