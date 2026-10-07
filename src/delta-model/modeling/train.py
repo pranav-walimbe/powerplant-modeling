@@ -3,6 +3,7 @@
 import argparse
 import json
 import random
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -224,6 +225,7 @@ def fit_model(
     checkpoint_path: Path,
     checkpoint_metadata: dict[str, object],
     phase_name: str,
+    validation_callback: Callable[[int, float], None] | None = None,
 ) -> tuple[list[float], list[float], float, float]:
     """Fit one classifier and restore its best-validation-macro-F1 state."""
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -290,9 +292,11 @@ def fit_model(
             )
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= args.early_stop_patience:
-                print(f"Early stopping {phase_name} at epoch {epoch}")
-                break
+        if validation_callback is not None:
+            validation_callback(epoch, validation_macro_f1)
+        if not selection_improved and epochs_without_improvement >= args.early_stop_patience:
+            print(f"Early stopping {phase_name} at epoch {epoch}")
+            break
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])

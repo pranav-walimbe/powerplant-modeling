@@ -126,15 +126,12 @@ normalization on the training split, interpolates missing NO2 into temporary
 memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;
-- a vision model with scale-and-shift context modulation of observation and
-  advection-residual features at each timestep.
+- a two-branch vision model that fuses the context embedding before
+  classification.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on
-`savio4_gpu` with `a5k_gpu4_normal`. Set `CONTRIBUTION_SPLAT_SIGMA` to tune the
-spatial target width and `RASTER_LOSS_WEIGHT` to tune its weight in the joint
-loss. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
-`SINKHORN_ITERATIONS` configure the spatial loss. See
-[modeling.md](modeling.md) for the model contract.
+`savio4_gpu` with `a5k_gpu4_normal`. See [modeling.md](modeling.md) for the
+model contract and validation-only hyperparameter search.
 
 ## Current Savio launchers
 

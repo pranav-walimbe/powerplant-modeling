@@ -1,4 +1,4 @@
-"""Optimize joint vision-model hyperparameters on the validation split."""
+"""Optimize vision-classifier hyperparameters on the validation split."""
 
 import argparse
 import gc
@@ -9,14 +9,12 @@ from pathlib import Path
 
 import optuna
 import torch
-from modeling.convgru import JointVisionClassifier
+from modeling.convgru import VisionClassifier
 from modeling.dataset import (
     MODEL_FEATURE_NAMES,
     NormalizationStats,
     NOxDataset,
     compute_stats,
-    contribution_target_metadata,
-    materialize_contribution_targets,
     save_stats,
 )
 from modeling.train import (
@@ -28,7 +26,6 @@ from modeling.train import (
     DEFAULT_SCHEDULER_FACTOR,
     DEFAULT_SCHEDULER_PATIENCE,
     DEFAULT_SEED,
-    DEFAULT_SINKHORN_ITERATIONS,
     DEFAULT_WORKERS,
     PIXEL_FILL_METADATA,
     _class_counts,
@@ -38,7 +35,7 @@ from modeling.train import (
     _fit_transport_residual_stats,
     _loader,
     _seed_everything,
-    fit_joint_model,
+    fit_model,
 )
 from modeling.transport import TransportConfig, TransportTransform
 
@@ -56,17 +53,13 @@ FIXED_HEAD_DIM = 48
 LEARNING_RATE_RANGE = (1e-5, 1e-4)
 WEIGHT_DECAY_CHOICES = (1e-4, 1e-3)
 DROPOUT_CHOICES = (0.2, 0.4)
-RASTER_LOSS_WEIGHT_CHOICES = (0.5, 1.0)
-CONTRIBUTION_SPLAT_SIGMA_CHOICES = (1.0, 1.5)
-SINKHORN_BLUR_CHOICES = (1.0, 1.5)
-SINKHORN_REACH_CHOICES = (3.0, 6.0)
 TPE_STARTUP_TRIALS = 6
 PRUNING_WARMUP_EPOCHS = 3
 
 
 @dataclass(frozen=True)
 class _PreparedSearch:
-    datasets_by_sigma: dict[float, dict[str, NOxDataset]]
+    datasets: dict[str, NOxDataset]
     class_weight_values: tuple[float, ...]
     normalization_stats: NormalizationStats
     transport_config: TransportConfig
@@ -81,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trials", type=int, default=DEFAULT_TRIALS)
-    parser.add_argument("--study-name", default="contribution-joint-hpo")
+    parser.add_argument("--study-name", default="classification-hpo")
     parser.add_argument("--study-dir")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
@@ -97,7 +90,6 @@ def parse_args() -> argparse.Namespace:
         scheduler_patience=DEFAULT_SCHEDULER_PATIENCE,
         scheduler_factor=DEFAULT_SCHEDULER_FACTOR,
         early_stop_patience=DEFAULT_EARLY_STOP_PATIENCE,
-        sinkhorn_iterations=DEFAULT_SINKHORN_ITERATIONS,
     )
     return parser.parse_args()
 
@@ -109,7 +101,7 @@ def _resolve_study_dir(requested: str | None) -> Path:
         study_dir.mkdir(parents=True, exist_ok=True)
         return study_dir
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    study_dir = Path(RUNS_DIR) / f"contribution_hpo_{timestamp}"
+    study_dir = Path(RUNS_DIR) / f"classification_hpo_{timestamp}"
     study_dir.mkdir(parents=True, exist_ok=False)
     return study_dir
 
@@ -129,18 +121,11 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
         output_dir=completed_dir,
         args=args,
     )
+    del source_datasets
     if device.type == "cuda":
         torch.cuda.empty_cache()
-    target_paths_by_sigma = {
-        sigma: materialize_contribution_targets(
-            source_datasets,
-            completed_dir / f"contribution-targets-sigma-{sigma:g}",
-            sigma=sigma,
-        )
-        for sigma in CONTRIBUTION_SPLAT_SIGMA_CHOICES
-    }
 
-    base_datasets = {
+    datasets = {
         split: NOxDataset(
             split,
             stats,
@@ -150,7 +135,7 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
     }
     transport_config = TransportConfig()
     transport_stats_loader = _loader(
-        base_datasets["train"],
+        datasets["train"],
         shuffle=False,
         args=args,
         device=torch.device("cpu"),
@@ -164,20 +149,16 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
         residual_scale=transport_residual_stats["scale"],
         config=transport_config,
     )
-    datasets_by_sigma = {
-        sigma: {
-            split: NOxDataset(
-                split,
-                stats,
-                completed_raster_path=completed_paths[split],
-                transport_transform=transport_transform,
-                contribution_target_path=target_paths[split],
-            )
-            for split in ("train", "val")
-        }
-        for sigma, target_paths in target_paths_by_sigma.items()
+    transport_datasets = {
+        split: NOxDataset(
+            split,
+            stats,
+            completed_raster_path=completed_paths[split],
+            transport_transform=transport_transform,
+        )
+        for split in ("train", "val")
     }
-    class_weights = _class_weights(base_datasets["train"])
+    class_weights = _class_weights(datasets["train"])
     search_config = {
         "objective": "best_validation_macro_f1",
         "test_split_loaded": False,
@@ -191,23 +172,15 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
             "learning_rate": {"low": LEARNING_RATE_RANGE[0], "high": LEARNING_RATE_RANGE[1], "log": True},
             "weight_decay": list(WEIGHT_DECAY_CHOICES),
             "dropout": list(DROPOUT_CHOICES),
-            "raster_loss_weight": list(RASTER_LOSS_WEIGHT_CHOICES),
-            "contribution_splat_sigma": list(CONTRIBUTION_SPLAT_SIGMA_CHOICES),
-            "sinkhorn_blur_cells": list(SINKHORN_BLUR_CHOICES),
-            "sinkhorn_reach_cells": list(SINKHORN_REACH_CHOICES),
-        },
-        "contribution_target_contracts": {
-            str(sigma): contribution_target_metadata(sigma) for sigma in CONTRIBUTION_SPLAT_SIGMA_CHOICES
         },
         "fixed": {
             "model_width": FIXED_MODEL_WIDTH,
             "head_dim": FIXED_HEAD_DIM,
-            "sinkhorn_iterations": DEFAULT_SINKHORN_ITERATIONS,
             "early_stop_patience": DEFAULT_EARLY_STOP_PATIENCE,
             "batch_size": args.batch_size,
             "maximum_epochs": args.epochs,
         },
-        "class_counts": {split: _class_counts(dataset) for split, dataset in base_datasets.items()},
+        "class_counts": {split: _class_counts(dataset) for split, dataset in datasets.items()},
         "class_weights": class_weights,
         "normalization_fit_split": "train",
         "transport": {
@@ -219,7 +192,7 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
     with (study_dir / "search_config.json").open("w") as destination:
         json.dump(search_config, destination, indent=2)
     return _PreparedSearch(
-        datasets_by_sigma=datasets_by_sigma,
+        datasets=transport_datasets,
         class_weight_values=tuple(class_weights[name] for name in MODEL_CLASS_NAMES),
         normalization_stats=stats,
         transport_config=transport_config,
@@ -233,12 +206,6 @@ def _suggest_parameters(trial: optuna.Trial) -> dict[str, float]:
         "learning_rate": trial.suggest_float("learning_rate", *LEARNING_RATE_RANGE, log=True),
         "weight_decay": trial.suggest_categorical("weight_decay", WEIGHT_DECAY_CHOICES),
         "dropout": trial.suggest_categorical("dropout", DROPOUT_CHOICES),
-        "raster_loss_weight": trial.suggest_categorical("raster_loss_weight", RASTER_LOSS_WEIGHT_CHOICES),
-        "contribution_splat_sigma": trial.suggest_categorical(
-            "contribution_splat_sigma", CONTRIBUTION_SPLAT_SIGMA_CHOICES
-        ),
-        "sinkhorn_blur_cells": trial.suggest_categorical("sinkhorn_blur_cells", SINKHORN_BLUR_CHOICES),
-        "sinkhorn_reach_cells": trial.suggest_categorical("sinkhorn_reach_cells", SINKHORN_REACH_CHOICES),
     }
 
 
@@ -253,17 +220,15 @@ def _objective(
     # Train one fixed-seed vision model and select only on validation macro F1
     parameters = _suggest_parameters(trial)
     trial_args = argparse.Namespace(**{**vars(args), **parameters})
-    sigma = parameters["contribution_splat_sigma"]
-    datasets = prepared.datasets_by_sigma[sigma]
     _seed_everything(args.seed)
-    model = JointVisionClassifier(
+    model = VisionClassifier(
         len(MODEL_FEATURE_NAMES),
         model_width=FIXED_MODEL_WIDTH,
         head_dim=FIXED_HEAD_DIM,
         dropout=parameters["dropout"],
     ).to(device)
-    train_loader = _loader(datasets["train"], shuffle=True, args=trial_args, device=device)
-    val_loader = _loader(datasets["val"], shuffle=False, args=trial_args, device=device)
+    train_loader = _loader(prepared.datasets["train"], shuffle=True, args=trial_args, device=device)
+    val_loader = _loader(prepared.datasets["val"], shuffle=False, args=trial_args, device=device)
     trial_dir = study_dir / f"trial_{trial.number:04d}"
     trial_dir.mkdir(parents=True, exist_ok=False)
     checkpoint_path = trial_dir / "best_vision_classifier.pt"
@@ -281,10 +246,8 @@ def _objective(
             train_losses,
             validation_losses,
             best_validation_macro_f1,
-            checkpoint_total_loss,
-            checkpoint_classification_loss,
-            checkpoint_raster_loss,
-        ) = fit_joint_model(
+            checkpoint_validation_loss,
+        ) = fit_model(
             model,
             train_loader,
             val_loader,
@@ -304,17 +267,11 @@ def _objective(
                 "pixel_fill": PIXEL_FILL_METADATA,
                 "transport_residual_stats": prepared.transport_residual_stats,
                 "transport_config": prepared.transport_config.to_metadata(),
-                "contribution_target": contribution_target_metadata(sigma),
-                "raster_loss": {
-                    "name": "debiased_unbalanced_sinkhorn_divergence",
-                    "blur_cells": parameters["sinkhorn_blur_cells"],
-                    "reach_cells": parameters["sinkhorn_reach_cells"],
-                    "iterations": DEFAULT_SINKHORN_ITERATIONS,
-                },
-                "raster_loss_weight": parameters["raster_loss_weight"],
+                "loss": "training_prevalence_weighted_hard_cross_entropy",
                 "selection_metric": "validation_macro_f1",
                 "test_split_evaluated": False,
             },
+            phase_name=f"HPO trial {trial.number}",
             validation_callback=report_validation,
         )
         trial_summary = {
@@ -322,9 +279,7 @@ def _objective(
             "state": "complete",
             "hyperparameters": parameters,
             "best_validation_macro_f1": best_validation_macro_f1,
-            "checkpoint_validation_loss": checkpoint_total_loss,
-            "checkpoint_validation_classification_loss": checkpoint_classification_loss,
-            "checkpoint_validation_raster_sinkhorn": checkpoint_raster_loss,
+            "checkpoint_validation_loss": checkpoint_validation_loss,
             "loss_history": {"train": train_losses, "validation": validation_losses},
             "test_split_evaluated": False,
         }
