@@ -319,6 +319,7 @@ def main() -> None:
         "image_keys": list(stats.image_keys),
         "image_center": list(stats.image_center),
         "image_scale": list(stats.image_scale),
+        "normalization_method": stats.normalization_method,
         "image_clip_range": [-MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS],
         "synthetic_masking": checkpoint_metadata["synthetic_masking"],
         "model_parameters": model.num_params(),
