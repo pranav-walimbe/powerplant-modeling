@@ -48,11 +48,11 @@ from config import (
 )
 
 DEFAULT_TRIALS = 24
-FIXED_MODEL_WIDTH = 64
 FIXED_HEAD_DIM = 48
 LEARNING_RATE_RANGE = (1e-5, 1e-4)
 WEIGHT_DECAY_CHOICES = (1e-4, 1e-3)
 DROPOUT_CHOICES = (0.2, 0.4)
+MODEL_WIDTH_CHOICES = (32, 64, 96)
 TPE_STARTUP_TRIALS = 6
 PRUNING_WARMUP_EPOCHS = 3
 
@@ -84,7 +84,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.set_defaults(
-        model_width=FIXED_MODEL_WIDTH,
         head_dim=FIXED_HEAD_DIM,
         gradient_clip_norm=DEFAULT_GRADIENT_CLIP_NORM,
         scheduler_patience=DEFAULT_SCHEDULER_PATIENCE,
@@ -172,9 +171,9 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
             "learning_rate": {"low": LEARNING_RATE_RANGE[0], "high": LEARNING_RATE_RANGE[1], "log": True},
             "weight_decay": list(WEIGHT_DECAY_CHOICES),
             "dropout": list(DROPOUT_CHOICES),
+            "model_width": list(MODEL_WIDTH_CHOICES),
         },
         "fixed": {
-            "model_width": FIXED_MODEL_WIDTH,
             "head_dim": FIXED_HEAD_DIM,
             "early_stop_patience": DEFAULT_EARLY_STOP_PATIENCE,
             "batch_size": args.batch_size,
@@ -200,12 +199,13 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
     )
 
 
-def _suggest_parameters(trial: optuna.Trial) -> dict[str, float]:
+def _suggest_parameters(trial: optuna.Trial) -> dict[str, float | int]:
     # Sample the focused search space
     return {
         "learning_rate": trial.suggest_float("learning_rate", *LEARNING_RATE_RANGE, log=True),
         "weight_decay": trial.suggest_categorical("weight_decay", WEIGHT_DECAY_CHOICES),
         "dropout": trial.suggest_categorical("dropout", DROPOUT_CHOICES),
+        "model_width": trial.suggest_categorical("model_width", MODEL_WIDTH_CHOICES),
     }
 
 
@@ -223,9 +223,9 @@ def _objective(
     _seed_everything(args.seed)
     model = VisionClassifier(
         len(MODEL_FEATURE_NAMES),
-        model_width=FIXED_MODEL_WIDTH,
+        model_width=int(parameters["model_width"]),
         head_dim=FIXED_HEAD_DIM,
-        dropout=parameters["dropout"],
+        dropout=float(parameters["dropout"]),
     ).to(device)
     train_loader = _loader(prepared.datasets["train"], shuffle=True, args=trial_args, device=device)
     val_loader = _loader(prepared.datasets["val"], shuffle=False, args=trial_args, device=device)
@@ -253,7 +253,7 @@ def _objective(
             val_loader,
             device=device,
             epochs=args.epochs,
-            learning_rate=parameters["learning_rate"],
+            learning_rate=float(parameters["learning_rate"]),
             class_weight_values=prepared.class_weight_values,
             args=trial_args,
             checkpoint_path=checkpoint_path,

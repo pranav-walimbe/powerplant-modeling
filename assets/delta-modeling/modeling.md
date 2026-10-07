@@ -104,9 +104,10 @@ CLI option or masked-model checkpoint dependency.
 `modeling.optimize` runs a seeded TPE search with median pruning.
 It reuses train-only normalization and completed train/validation rasters across
 trials. It never loads or evaluates the test split. The search varies learning
-rate, weight decay, and dropout while holding model width at 64.
+rate, weight decay, dropout, and model width.
 Learning rate is sampled log-uniformly from `1e-5` through `1e-4`. The
-categorical choices are weight decay `{1e-4, 1e-3}` and dropout `{0.2, 0.4}`.
+categorical choices are weight decay `{1e-4, 1e-3}`, dropout `{0.2, 0.4}`,
+and model width `{32, 64, 96}`.
 
 Run the maintained 24-trial Savio search with:
 
