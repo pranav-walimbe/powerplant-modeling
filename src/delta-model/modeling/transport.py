@@ -270,7 +270,7 @@ class TransportTransform:
         self,
         image: torch.Tensor,
         elapsed_hours: torch.Tensor,
-        no2_normalization: torch.Tensor,
+        no2_center_scale: torch.Tensor,
         *,
         transport_wind_mps: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -279,7 +279,7 @@ class TransportTransform:
         Args:
             image: Completed raster sequence shaped batch by five by channel by height by width.
             elapsed_hours: Four elapsed scan intervals per sample.
-            no2_normalization: Per-sample NO2 center and scale used by the observation branch.
+            no2_center_scale: Per-sample NO2 center and scale used by the observation branch.
             transport_wind_mps: Optional interval wind with u and v channels.
 
         Returns:
@@ -287,8 +287,8 @@ class TransportTransform:
         """
         batch_size, timesteps, _, height, width = image.shape
         interval_count = timesteps - 1
-        no2_center = no2_normalization[:, 0, None, None, None]
-        no2_scale = no2_normalization[:, 1, None, None, None]
+        no2_center = no2_center_scale[:, 0, None, None, None]
+        no2_scale = no2_center_scale[:, 1, None, None, None]
         physical_no2 = image[:, :, self.no2_channel] * no2_scale + no2_center
         prior = physical_no2[:, :-1].reshape(batch_size * interval_count, 1, height, width)
         current = physical_no2[:, 1:].reshape_as(prior)
@@ -321,7 +321,7 @@ class TransportTransform:
         self,
         image: torch.Tensor,
         elapsed_hours: torch.Tensor,
-        no2_normalization: torch.Tensor,
+        no2_center_scale: torch.Tensor,
         *,
         transport_wind_mps: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -329,7 +329,7 @@ class TransportTransform:
         residual, quality = self.physical_residual(
             image,
             elapsed_hours,
-            no2_normalization,
+            no2_center_scale,
             transport_wind_mps=transport_wind_mps,
         )
         normalized = ((residual - self.residual_center) / self.residual_scale).clamp(

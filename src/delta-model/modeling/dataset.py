@@ -394,7 +394,11 @@ def _update_moments(
     return combined_mean, combined_deviation
 
 
-def _fit_image_stats(raster_paths: np.ndarray, root: Path, progress_interval: int) -> tuple[np.ndarray, ...]:
+def _fit_image_stats(
+    raster_paths: np.ndarray,
+    root: Path,
+    progress_interval: int,
+) -> tuple[np.ndarray, ...]:
     # Accumulate train-split moments for every numeric raster channel
     channel_count = len(MODEL_IMAGE_KEYS)
     count = np.zeros(channel_count, dtype=np.int64)
@@ -555,7 +559,7 @@ class NOxDataset(Dataset):
         source_stats = source_image_stats or self.stats.to_dict()
         self.source_image_center = np.asarray(source_stats["image_center"], dtype=np.float32)
         self.source_image_scale = np.asarray(source_stats["image_scale"], dtype=np.float32)
-        self.no2_normalization = np.broadcast_to(
+        self.no2_center_scale = np.broadcast_to(
             np.asarray(
                 (self.image_center[NO2_CHANNEL], self.image_scale[NO2_CHANNEL]),
                 dtype=np.float32,
@@ -622,11 +626,11 @@ class NOxDataset(Dataset):
         transport = torch.empty(0, dtype=torch.float32)
         if self.transport_transform is not None:
             elapsed_hours = torch.from_numpy(self.elapsed_hours[index]).unsqueeze(0)
-            no2_normalization = torch.from_numpy(self.no2_normalization[index]).unsqueeze(0)
+            no2_center_scale = torch.from_numpy(self.no2_center_scale[index]).unsqueeze(0)
             residual, quality = self.transport_transform(
                 image.unsqueeze(0),
                 elapsed_hours,
-                no2_normalization,
+                no2_center_scale,
             )
             transport = torch.cat((residual, quality), dim=2).squeeze(0)
         item = (

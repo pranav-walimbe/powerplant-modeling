@@ -11,7 +11,7 @@ OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
 OUTPUT_STEM = OUTPUT_DIR / "classification-performance"
 
 MODEL_NAMES = ("Baseline MLP", "ConvGRU")
-MODEL_COLORS = ("#4C78A8", "#E45756")
+MODEL_COLORS = ("#0072B2", "#E69F00")
 MODEL_HATCHES = (None, "///")
 
 CLASS_NAMES = ("Decrease", "Steady", "Increase")
@@ -19,13 +19,13 @@ SPLIT_NAMES = ("Train", "Validation", "Test")
 PER_CLASS_F1 = np.array(
     [
         [[0.546, 0.361, 0.675], [0.436, 0.388, 0.635], [0.397, 0.382, 0.702]],
-        [[0.610, 0.542, 0.716], [0.538, 0.610, 0.733], [0.438, 0.514, 0.668]],
+        [[0.614, 0.514, 0.722], [0.532, 0.580, 0.743], [0.444, 0.486, 0.684]],
     ]
 )
 PER_CLASS_RECALL = np.array(
     [
         [[0.548, 0.312, 0.745], [0.563, 0.332, 0.654], [0.457, 0.310, 0.771]],
-        [[0.582, 0.538, 0.739], [0.574, 0.583, 0.745], [0.476, 0.530, 0.635]],
+        [[0.619, 0.474, 0.762], [0.612, 0.516, 0.776], [0.529, 0.460, 0.671]],
     ]
 )
 AGGREGATE_NAMES = ("Macro-F1", "Balanced acc.")
@@ -37,9 +37,9 @@ AGGREGATE_METRICS = np.array(
             [0.494, PER_CLASS_RECALL[0, 2].mean()],
         ],
         [
-            [0.622, PER_CLASS_RECALL[1, 0].mean()],
-            [0.627, PER_CLASS_RECALL[1, 1].mean()],
-            [0.540, PER_CLASS_RECALL[1, 2].mean()],
+            [0.617, PER_CLASS_RECALL[1, 0].mean()],
+            [0.619, PER_CLASS_RECALL[1, 1].mean()],
+            [0.538, PER_CLASS_RECALL[1, 2].mean()],
         ],
     ]
 )

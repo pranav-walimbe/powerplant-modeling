@@ -19,12 +19,12 @@ from config import (
     MASKED_PRETRAINING_DF_DIR,
     MODEL_IMAGE_CLIP_ABS,
     MODEL_IMAGE_KEYS,
-    MODEL_ROBUST_IMAGE_KEYS,
 )
 
 RASTER_PATH_COL = "raster_bundle_path"
 CACHE_KEY_COL = "cache_key"
 MASKED_IMAGE_KEYS = MODEL_IMAGE_KEYS
+ROBUST_IMAGE_KEYS = ("no2",)
 ORIGINAL_MASK_KEY = "no2_mask"
 MIN_SCALE = 1e-12
 ROBUST_STD_NORMALIZER = 1.349
@@ -88,7 +88,7 @@ def compute_stats(
     paths = frame[RASTER_PATH_COL].to_numpy(dtype=str)
     root = Path(dataset_dir)
     channel_count = len(MASKED_IMAGE_KEYS)
-    robust_channels = tuple(MASKED_IMAGE_KEYS.index(name) for name in MODEL_ROBUST_IMAGE_KEYS)
+    robust_channels = tuple(MASKED_IMAGE_KEYS.index(name) for name in ROBUST_IMAGE_KEYS)
     counts = np.zeros(channel_count, dtype=np.int64)
     sums = np.zeros(channel_count, dtype=np.float64)
     squared_sums = np.zeros(channel_count, dtype=np.float64)

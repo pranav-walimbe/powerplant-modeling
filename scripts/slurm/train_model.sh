@@ -18,7 +18,8 @@ set -euo pipefail
 cd "/global/home/users/pranavwalimbe/no2-modeling"
 module load python/3.11.6-gcc-11.4.0
 source .venv/bin/activate
-export PYTHONPATH="/global/home/users/pranavwalimbe/no2-modeling/src:/global/home/users/pranavwalimbe/no2-modeling/src/delta-model"
+experiment_source_root="${EXPERIMENT_SOURCE_ROOT:-/global/home/users/pranavwalimbe/no2-modeling}"
+export PYTHONPATH="${experiment_source_root}/src:${experiment_source_root}/src/delta-model"
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -44,11 +45,6 @@ mkdir -p "/global/home/users/pranavwalimbe/.cache"
 training_output=$(mktemp "/global/home/users/pranavwalimbe/.cache/train-no2-${SLURM_JOB_ID}.XXXXXX.log")
 trap 'rm -f -- "${training_output}"' EXIT
 recipient="pranav.walimbe@berkeley.edu"
-raster_loss_weight="${RASTER_LOSS_WEIGHT:-1.0}"
-contribution_splat_sigma="${CONTRIBUTION_SPLAT_SIGMA:-1.0}"
-sinkhorn_blur_cells="${SINKHORN_BLUR_CELLS:-1.0}"
-sinkhorn_reach_cells="${SINKHORN_REACH_CELLS:-6.0}"
-sinkhorn_iterations="${SINKHORN_ITERATIONS:-30}"
 
 # Slurm 22.05 and later stopped propagating --cpus-per-task into srun
 export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
@@ -68,14 +64,9 @@ srun python -u -m modeling.train \
     --learning-rate 6.0378112892784365e-5 \
     --weight-decay 1e-4 \
     --gradient-clip-norm 5.0 \
-    --scheduler-patience 10 \
+    --scheduler-patience 5 \
     --scheduler-factor 0.50 \
     --early-stop-patience 10 \
-    --raster-loss-weight "${raster_loss_weight}" \
-    --contribution-splat-sigma "${contribution_splat_sigma}" \
-    --sinkhorn-blur-cells "${sinkhorn_blur_cells}" \
-    --sinkhorn-reach-cells "${sinkhorn_reach_cells}" \
-    --sinkhorn-iterations "${sinkhorn_iterations}" \
     | tee "${training_output}"
 echo "Training command completed; locating result artifacts"
 
