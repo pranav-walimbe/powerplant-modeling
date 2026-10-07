@@ -1,9 +1,9 @@
 # Modeling
 
 The delta trainer compares two classifiers on the same geographic splits and
-fixed seed. A pretrained masked model fills low-quality NO2 pixels before
-classifier training. The classifier still receives the original NO2 quality
-mask, so it can distinguish observations from filled values.
+fixed seed. Separable bilinear interpolation fills low-quality NO2 pixels before
+classifier training. The classifier also receives the original NO2 quality mask
+so it can distinguish observations from filled values.
 
 ## Contract
 
@@ -26,18 +26,16 @@ statistics.
 
 ## Raster completion and quality
 
-The masked model uses its checkpoint's global statistics to fill NO2. Training
-stores five channels in job-local memory-mapped arrays: four inputs in the
-masked model's normalized space plus the original NO2 mask. Observed pixels
-receive quality 1; filled pixels receive quality 0. The classifier processes
-every filled value and uses quality as a separate input channel.
+The classifier pipeline fits a global mean and population standard deviation to
+every raster channel using only the training split. It then fills missing NO2
+with the mean of horizontal and vertical linear interpolation in that frozen
+normalized space. Rows or columns without visible support fall back to the
+frame's visible-pixel mean.
 
-The masked model's checkpoint statistics are used only during raster
-completion. The classifier pipeline fits a global mean and population
-standard deviation to every raster channel, including NO2, using only the
-training split. The completed train, validation, and test rasters are converted
-from the masked model's normalized space into this frozen classifier
-normalization.
+Training stores five channels in job-local memory-mapped arrays: four normalized
+physical inputs plus the original NO2 mask. Observed pixels receive quality 1;
+filled pixels receive quality 0. The classifier processes every filled value and
+uses quality as a separate input channel.
 
 ## Transport residuals
 
@@ -134,10 +132,9 @@ Run the production workflow with:
 sbatch scripts/slurm/train_model.sh
 ```
 
-The training CLI requires exactly one missing-pixel strategy. Use
-`--fill-interpolate` for bilinear interpolation in the classifier's
-training-split normalization or `--fill-reconstruct` for the pretrained masked
-model using the normalization statistics stored in its checkpoint.
+Training always fills missing NO2 pixels with separable bilinear interpolation
+in the classifier's training-split normalization. There is no fill-strategy
+CLI option or masked-model checkpoint dependency.
 
 ## Hyperparameter optimization
 

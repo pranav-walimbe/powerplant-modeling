@@ -105,15 +105,13 @@ does not rebalance after raster filtering, and emails a plot of the surviving
 emissions trajectories and exact class counts by split. See
 [regridding.md](regridding.md).
 
-## 4. Provide a masked-model checkpoint
+## 4. Missing-pixel interpolation
 
-Delta training uses a masked NO2 checkpoint to fill missing NO2 pixels before
-classifier training. It does not copy the masked encoder into the classifier. Set
-`PRETRAINED_MASKED_MODEL_WEIGHTS` to the checkpoint path or use the default in
-`src/config.py`.
-
-The masked-pretraining workflow lives in
-[masked-pretraining/setup-and-pipeline.md](../masked-pretraining/setup-and-pipeline.md).
+Delta training always fills missing NO2 pixels with separable bilinear
+interpolation in the classifier's training-split normalization. The standalone
+masked-pretraining workflow remains available in
+[masked-pretraining/setup-and-pipeline.md](../masked-pretraining/setup-and-pipeline.md),
+but its checkpoints are not used by delta modeling.
 
 ## 5. Train and evaluate
 
@@ -123,8 +121,8 @@ Submit the maintained launcher:
 sbatch scripts/slurm/train_model.sh
 ```
 
-The job stages split metadata in job-local `/tmp`, fits global
-raster normalization on the training split, fills missing NO2 into temporary
+The job stages split metadata in job-local `/tmp`, fits global raster
+normalization on the training split, interpolates missing NO2 into temporary
 memory-mapped arrays, and trains two classifiers:
 
 - a four-input seasonal MLP;

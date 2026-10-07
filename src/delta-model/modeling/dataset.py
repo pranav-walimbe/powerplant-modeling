@@ -351,7 +351,7 @@ def _load_rasters(path: Path) -> np.ndarray:
 
 
 def _load_raster_bundle(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    # Load physical channels and masks for reconstruction inputs
+    # Load physical channels and masks for interpolation inputs
     with np.load(path, allow_pickle=False) as bundle:
         rasters = np.stack([bundle[name] for name in MODEL_IMAGE_KEYS], axis=1)
         masks = np.stack([bundle[name] for name in MODEL_MASK_KEYS], axis=1).astype(np.float32)
@@ -540,7 +540,6 @@ class NOxDataset(Dataset):
         dataframe_dir: str | Path = DATASET_DF,
         load_images: bool = True,
         completed_raster_path: str | Path | None = None,
-        source_image_stats: dict[str, object] | None = None,
         transport_transform: TransportTransform | None = None,
         contribution_target_path: str | Path | None = None,
     ) -> None:
@@ -556,9 +555,6 @@ class NOxDataset(Dataset):
         self.stats = stats if isinstance(stats, NormalizationStats) else NormalizationStats.from_dict(stats)
         self.image_center = np.asarray(self.stats.image_center, dtype=np.float32)
         self.image_scale = np.asarray(self.stats.image_scale, dtype=np.float32)
-        source_stats = source_image_stats or self.stats.to_dict()
-        self.source_image_center = np.asarray(source_stats["image_center"], dtype=np.float32)
-        self.source_image_scale = np.asarray(source_stats["image_scale"], dtype=np.float32)
         self.no2_center_scale = np.broadcast_to(
             np.asarray(
                 (self.image_center[NO2_CHANNEL], self.image_scale[NO2_CHANNEL]),
@@ -589,15 +585,8 @@ class NOxDataset(Dataset):
     def __len__(self) -> int:
         return len(self.labels)
 
-    def _normalize_completed(self, completed: np.ndarray) -> torch.Tensor:
-        # Convert masked-model normalization into classifier normalization
-        numeric = completed[:, : len(MODEL_IMAGE_KEYS)]
-        source_center = self.source_image_center[None, :, None, None]
-        source_scale = self.source_image_scale[None, :, None, None]
-        physical = numeric * source_scale + source_center
-        center = self.image_center[None, :, None, None]
-        scale = self.image_scale[None, :, None, None]
-        numeric[:] = (physical - center) / scale
+    def _load_completed(self, completed: np.ndarray) -> torch.Tensor:
+        # Bound materialized classifier-normalized inputs
         np.clip(completed, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=completed)
         return torch.from_numpy(completed)
 
@@ -607,7 +596,7 @@ class NOxDataset(Dataset):
                 if self._completed_rasters is None:
                     self._completed_rasters = np.load(self.completed_raster_path, mmap_mode="r")
                 completed = np.array(self._completed_rasters[index], copy=True)
-                image = self._normalize_completed(completed)
+                image = self._load_completed(completed)
             else:
                 raster_path = _raster_path(self.raster_paths[index], self.dataset_dir)
                 rasters, masks = _load_raster_bundle(raster_path)
@@ -617,8 +606,8 @@ class NOxDataset(Dataset):
                     channel_values = rasters[:, channel][channel_valid]
                     normalized_channel = normalized[:, channel]
                     normalized_channel[channel_valid] = (
-                        channel_values - self.source_image_center[channel]
-                    ) / self.source_image_scale[channel]
+                        channel_values - self.image_center[channel]
+                    ) / self.image_scale[channel]
                 np.clip(normalized, -MODEL_IMAGE_CLIP_ABS, MODEL_IMAGE_CLIP_ABS, out=normalized)
                 image = torch.from_numpy(np.concatenate((normalized, masks), axis=1))
         else:

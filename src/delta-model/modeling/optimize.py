@@ -30,9 +30,9 @@ from modeling.train import (
     DEFAULT_SEED,
     DEFAULT_SINKHORN_ITERATIONS,
     DEFAULT_WORKERS,
+    PIXEL_FILL_METADATA,
     _class_counts,
     _class_weights,
-    _configure_fill,
     _device,
     _fill_missing_rasters,
     _fit_transport_residual_stats,
@@ -46,7 +46,6 @@ from config import (
     MODEL_CLASS_NAMES,
     MODEL_TARGET_COL,
     NUM_CORES,
-    PRETRAINED_MASKED_MODEL_WEIGHTS,
     RUNS_DIR,
     SEQUENCE_TIMESTEPS,
 )
@@ -72,7 +71,6 @@ class _PreparedSearch:
     normalization_stats: NormalizationStats
     transport_config: TransportConfig
     transport_residual_stats: dict[str, float]
-    fill_metadata: dict[str, object]
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,10 +88,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=min(DEFAULT_WORKERS, NUM_CORES))
     parser.add_argument("--prefetch-factor", type=int, default=DEFAULT_PREFETCH_FACTOR)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    fill_group = parser.add_mutually_exclusive_group(required=True)
-    fill_group.add_argument("--fill-interpolate", dest="fill_method", action="store_const", const="interpolate")
-    fill_group.add_argument("--fill-reconstruct", dest="fill_method", action="store_const", const="reconstruct")
-    parser.add_argument("--pretrained-masked-model-weights", default=PRETRAINED_MASKED_MODEL_WEIGHTS)
     parser.add_argument("--completed-raster-dir", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.set_defaults(
@@ -127,21 +121,14 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
         raise ValueError("Completed raster directory must be under job-local /tmp")
     stats = compute_stats("train")
     save_stats(stats, study_dir / "normalization_stats.json")
-    fill_missing, fill_image_stats, fill_device, fill_metadata = _configure_fill(args, stats, device)
 
-    source_datasets = {
-        split: NOxDataset(split, stats, source_image_stats=fill_image_stats) for split in ("train", "val")
-    }
+    source_datasets = {split: NOxDataset(split, stats) for split in ("train", "val")}
     completed_dir = completed_root / study_dir.name
     completed_paths = _fill_missing_rasters(
-        fill_missing,
         source_datasets,
         output_dir=completed_dir,
         args=args,
-        device=fill_device,
-        fill_label=args.fill_method,
     )
-    del fill_missing
     if device.type == "cuda":
         torch.cuda.empty_cache()
     target_paths_by_sigma = {
@@ -158,7 +145,6 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
             split,
             stats,
             completed_raster_path=completed_paths[split],
-            source_image_stats=fill_image_stats,
         )
         for split in ("train", "val")
     }
@@ -184,7 +170,6 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
                 split,
                 stats,
                 completed_raster_path=completed_paths[split],
-                source_image_stats=fill_image_stats,
                 transport_transform=transport_transform,
                 contribution_target_path=target_paths[split],
             )
@@ -229,9 +214,7 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
             "residual_normalization": transport_residual_stats,
             **transport_config.to_metadata(),
         },
-        "pixel_fill": fill_metadata,
-        "pretrained_masked_model_weights": fill_metadata.get("pretrained_masked_model_weights"),
-        "pretrained_masked_model_sha256": fill_metadata.get("pretrained_masked_model_sha256"),
+        "pixel_fill": PIXEL_FILL_METADATA,
     }
     with (study_dir / "search_config.json").open("w") as destination:
         json.dump(search_config, destination, indent=2)
@@ -241,7 +224,6 @@ def _prepare_search(args: argparse.Namespace, study_dir: Path, device: torch.dev
         normalization_stats=stats,
         transport_config=transport_config,
         transport_residual_stats=transport_residual_stats,
-        fill_metadata=fill_metadata,
     )
 
 
@@ -319,10 +301,7 @@ def _objective(
                 "target_name": MODEL_TARGET_COL,
                 "class_names": MODEL_CLASS_NAMES,
                 "sequence_timesteps": SEQUENCE_TIMESTEPS,
-                "pixel_fill": prepared.fill_metadata,
-                "pretrained_masked_model_sha256": prepared.fill_metadata.get(
-                    "pretrained_masked_model_sha256"
-                ),
+                "pixel_fill": PIXEL_FILL_METADATA,
                 "transport_residual_stats": prepared.transport_residual_stats,
                 "transport_config": prepared.transport_config.to_metadata(),
                 "contribution_target": contribution_target_metadata(sigma),
@@ -381,8 +360,7 @@ def _write_study_outputs(study: optuna.Study, study_dir: Path) -> None:
         "study_name": study.study_name,
         "direction": study.direction.name,
         "trial_counts": {
-            state.name.lower(): sum(trial.state is state for trial in study.trials)
-            for state in optuna.trial.TrialState
+            state.name.lower(): sum(trial.state is state for trial in study.trials) for state in optuna.trial.TrialState
         },
         "best_trial": (
             {

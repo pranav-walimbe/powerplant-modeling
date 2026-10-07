@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from matplotlib import colors
 from modeling.dataset import NormalizationStats, NOxDataset
-from modeling.train import _load_masked_checkpoint
+from modeling.train import _bilinear_interpolation_fill
 from modeling.transport import TransportConfig, TransportTransform
 
 from config import MODEL_CLASS_NAMES, MODEL_IMAGE_KEYS, RUNS_DIR
@@ -51,36 +51,26 @@ def _load_example() -> tuple[np.ndarray, np.ndarray, str, float]:
     # Recreate EDA example 4 through the recorded model-input pipeline
     run_config = _load_json(RUN_DIR / "run_config.json")
     stats = NormalizationStats.from_dict(_load_json(RUN_DIR / "normalization_stats.json"))
-    checkpoint_path = Path(str(run_config["pretrained_masked_model_weights"]))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint, model = _load_masked_checkpoint(checkpoint_path, device)
-    masked_stats = checkpoint["normalization_stats"]
-    dataset = NOxDataset("train", stats, source_image_stats=masked_stats)
+    dataset = NOxDataset("train", stats)
     image, _, _, label_index, _ = dataset[EXAMPLE_TRAIN_INDEX]
-    image = image.unsqueeze(0).to(device)
+    image = image.unsqueeze(0)
 
     batch_size, timesteps, channels, height, width = image.shape
     frames = image.reshape(batch_size * timesteps, channels, height, width)
-    with torch.inference_mode():
-        completed_no2 = model.fill_missing(frames)
+    completed_no2 = _bilinear_interpolation_fill(frames)
     completed = frames.clone()
     completed[:, :1] = completed_no2
     completed = completed.reshape(batch_size, timesteps, channels, height, width).float()
 
-    masked_center = torch.as_tensor(masked_stats["image_center"], dtype=completed.dtype, device=device)
-    masked_scale = torch.as_tensor(masked_stats["image_scale"], dtype=completed.dtype, device=device)
+    image_center = torch.as_tensor(stats.image_center, dtype=completed.dtype)
+    image_scale = torch.as_tensor(stats.image_scale, dtype=completed.dtype)
     numeric_channels = len(MODEL_IMAGE_KEYS)
     physical = (
-        completed[:, :, :numeric_channels] * masked_scale[None, None, :, None, None]
-        + masked_center[None, None, :, None, None]
+        completed[:, :, :numeric_channels] * image_scale[None, None, :, None, None]
+        + image_center[None, None, :, None, None]
     )
-
-    classifier_center = torch.as_tensor(stats.image_center, dtype=completed.dtype, device=device)
-    classifier_scale = torch.as_tensor(stats.image_scale, dtype=completed.dtype, device=device)
-    classifier_input = completed.clone()
-    classifier_input[:, :, :numeric_channels] = (
-        physical - classifier_center[None, None, :, None, None]
-    ) / classifier_scale[None, None, :, None, None]
+    classifier_input = completed.to(device)
 
     transport_metadata = run_config["transport"]
     transport = TransportTransform(
@@ -101,7 +91,7 @@ def _load_example() -> tuple[np.ndarray, np.ndarray, str, float]:
             no2_center_scale,
         )
     return (
-        physical[0].cpu().numpy(),
+        physical[0].numpy(),
         residuals[0, :, 0].cpu().numpy(),
         MODEL_CLASS_NAMES[int(label_index)],
         float(
