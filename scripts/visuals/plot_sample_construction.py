@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib import colors
-from matplotlib.lines import Line2D
 from modeling.dataset import NormalizationStats, NOxDataset
 from modeling.train import _load_masked_checkpoint
 from modeling.transport import TransportConfig, TransportTransform
@@ -28,7 +27,7 @@ EXAMPLE_TRAIN_INDEX = 27_621
 NO2_DISPLAY_SCALE = 1.0e15
 WIND_ARROW_STEP = 4
 FIGURE_WIDTH = 7.15
-FIGURE_HEIGHT = 2.90
+FIGURE_HEIGHT = 2.32
 
 
 def _load_json(path: Path) -> dict[str, object]:
@@ -133,18 +132,24 @@ def _format_raster_axis(axis: plt.Axes) -> None:
         spine.set_linewidth(0.35)
 
 
-def _add_group_title(figure: plt.Figure, slot: plt.SubplotSpec, title: str) -> None:
-    # Place the group title independently of timestep labels
-    bounds = slot.get_position(figure)
-    figure.text(
-        (bounds.x0 + bounds.x1) / 2,
-        bounds.y1 + 0.008,
+def _add_group_title(axis: plt.Axes, title: str) -> None:
+    # Reserve a dedicated row for the modality heading
+    axis.set_axis_off()
+    axis.text(
+        0.5,
+        0.82,
         title,
         ha="center",
-        va="bottom",
+        va="center",
         fontsize=7.5,
         fontweight="normal",
     )
+
+
+def _add_timestep_label(axis: plt.Axes, label: str, *, fontsize: float = 6.3) -> None:
+    # Reserve a separate row for each timestep label
+    axis.set_axis_off()
+    axis.text(0.5, 0.45, label, ha="center", va="center", fontsize=fontsize)
 
 
 def _add_colorbar(
@@ -176,20 +181,26 @@ def _plot_scalar_sequence(
     normalization: colors.Normalize,
 ) -> None:
     # Plot five aligned rasters with one shared scale
-    layout = slot.subgridspec(2, 5, height_ratios=(1.0, 0.08), hspace=0.24, wspace=0.06)
+    layout = slot.subgridspec(
+        6,
+        5,
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.08),
+        hspace=0.0,
+        wspace=0.06,
+    )
+    _add_group_title(figure.add_subplot(layout[0, :]), title)
     for timestep in range(5):
-        axis = figure.add_subplot(layout[0, timestep])
+        _add_timestep_label(figure.add_subplot(layout[1, timestep]), f"$t_{timestep}$")
+        axis = figure.add_subplot(layout[3, timestep])
         axis.imshow(values[timestep], origin="lower", cmap=color_map, norm=normalization)
-        axis.set_title(f"$t_{timestep}$", fontsize=6.3, pad=1.0)
         _format_raster_axis(axis)
     _add_colorbar(
         figure,
-        figure.add_subplot(layout[1, :]),
+        figure.add_subplot(layout[5, :]),
         normalization,
         color_map,
         colorbar_label,
     )
-    _add_group_title(figure, slot, title)
 
 
 def _plot_wind_sequence(
@@ -201,14 +212,22 @@ def _plot_wind_sequence(
     # Combine wind magnitude and direction in each timestep raster
     speed = np.hypot(wind_u, wind_v)
     normalization = _robust_normalization(speed)
-    layout = slot.subgridspec(2, 5, height_ratios=(1.0, 0.08), hspace=0.24, wspace=0.06)
+    layout = slot.subgridspec(
+        6,
+        5,
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.08),
+        hspace=0.0,
+        wspace=0.06,
+    )
+    _add_group_title(figure.add_subplot(layout[0, :]), "(b) 80 m wind speed and direction")
     arrow_slice = np.s_[WIND_ARROW_STEP // 2 :: WIND_ARROW_STEP, WIND_ARROW_STEP // 2 :: WIND_ARROW_STEP]
     arrow_y, arrow_x = np.mgrid[
         WIND_ARROW_STEP // 2 : wind_u.shape[-2] : WIND_ARROW_STEP,
         WIND_ARROW_STEP // 2 : wind_u.shape[-1] : WIND_ARROW_STEP,
     ]
     for timestep in range(5):
-        axis = figure.add_subplot(layout[0, timestep])
+        _add_timestep_label(figure.add_subplot(layout[1, timestep]), f"$t_{timestep}$")
+        axis = figure.add_subplot(layout[3, timestep])
         axis.imshow(speed[timestep], origin="lower", cmap="magma", norm=normalization)
         axis.quiver(
             arrow_x,
@@ -222,16 +241,14 @@ def _plot_wind_sequence(
             width=0.010,
             headwidth=3.0,
         )
-        axis.set_title(f"$t_{timestep}$", fontsize=6.3, pad=1.0)
         _format_raster_axis(axis)
     _add_colorbar(
         figure,
-        figure.add_subplot(layout[1, :]),
+        figure.add_subplot(layout[5, :]),
         normalization,
         "magma",
         r"80 m wind speed (m s$^{-1}$)",
     )
-    _add_group_title(figure, slot, "(b) 80 m wind speed and direction")
 
 
 def _plot_residual_sequence(
@@ -242,66 +259,65 @@ def _plot_residual_sequence(
     # Plot the four physical transitions with one shared scale
     display_values = residuals / NO2_DISPLAY_SCALE
     normalization = _residual_normalization(display_values)
-    layout = slot.subgridspec(2, 4, height_ratios=(1.0, 0.08), hspace=0.24, wspace=0.06)
+    layout = slot.subgridspec(
+        6,
+        4,
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.08),
+        hspace=0.0,
+        wspace=0.06,
+    )
+    _add_group_title(figure.add_subplot(layout[0, :]), "(d) Transport residuals")
     for interval in range(4):
-        axis = figure.add_subplot(layout[0, interval])
+        _add_timestep_label(
+            figure.add_subplot(layout[1, interval]),
+            f"$t_{interval} \\to t_{interval + 1}$",
+            fontsize=5.6,
+        )
+        axis = figure.add_subplot(layout[3, interval])
         axis.imshow(display_values[interval], origin="lower", cmap="RdBu_r", norm=normalization)
-        axis.set_title(f"$t_{interval} \\to t_{interval + 1}$", fontsize=6.0, pad=1.0)
         _format_raster_axis(axis)
     _add_colorbar(
         figure,
-        figure.add_subplot(layout[1, :]),
+        figure.add_subplot(layout[5, :]),
         normalization,
         "RdBu_r",
         r"Transport residual ($10^{15}$ molecules cm$^{-2}$)",
     )
-    _add_group_title(figure, slot, "(d) Transport residuals")
 
 
-def _add_behavior_label(figure: plt.Figure, label: str, nox_delta: float) -> None:
-    # Group the complete input matrix with its behavior target
-    bracket_x = 0.825
-    bracket_left = 0.810
-    bracket_bottom = 0.080
-    bracket_top = 0.940
-    line_style = {
-        "color": "#4A4A4A",
-        "linewidth": 1.15,
-        "solid_capstyle": "round",
-        "transform": figure.transFigure,
-    }
-    figure.add_artist(Line2D((bracket_x, bracket_x), (bracket_bottom, bracket_top), **line_style))
-    figure.add_artist(Line2D((bracket_left, bracket_x), (bracket_top, bracket_top), **line_style))
-    figure.add_artist(Line2D((bracket_left, bracket_x), (bracket_bottom, bracket_bottom), **line_style))
-    figure.text(
-        0.910,
-        0.535,
-        "Behavior label:",
+def _add_sample_target(figure: plt.Figure, label: str, nox_delta: float) -> None:
+    # Place the target and its determining change on one header line
+    header_axis = figure.add_axes((0.0, 0.900, 1.0, 0.090), zorder=20)
+    header_axis.set_axis_off()
+    header_axis.text(
+        0.500,
+        0.65,
+        rf"Behavior Class: $\mathbf{{{label.upper()}}}$ (NO$_x$ delta: {nox_delta:+.1f} lb/hr)",
         ha="center",
-        va="bottom",
+        va="center",
         fontsize=8.0,
-        fontweight="normal",
-    )
-    figure.text(
-        0.910,
-        0.475,
-        label.upper(),
-        ha="center",
-        va="top",
-        fontsize=9.0,
-        fontweight="bold",
-        color={"decrease": "#2B6CB0", "steady": "#555555", "increase": "#C53030"}[label],
-    )
-    figure.text(
-        0.910,
-        0.405,
-        f"NO$_x$ delta:\n{nox_delta:+.1f} lb/hr",
-        ha="center",
-        va="top",
-        fontsize=7.4,
         fontweight="normal",
         color="#202020",
     )
+
+
+def _plot_temporal_features(figure: plt.Figure) -> None:
+    # Show the four cyclic context inputs as a compact symbolic vector
+    axis = figure.add_axes((0.800, 0.170, 0.195, 0.630))
+    axis.set_axis_off()
+    axis.set_title("(e) Tabular temporal\nfeatures", fontsize=7.2, fontweight="normal", pad=4)
+    bracket_color = "#4A4A4A"
+    bracket_width = 0.9
+    axis.plot((0.20, 0.20), (0.29, 0.67), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.20, 0.25), (0.67, 0.67), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.20, 0.25), (0.29, 0.29), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.80, 0.80), (0.29, 0.67), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.75, 0.80), (0.67, 0.67), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.75, 0.80), (0.29, 0.29), color=bracket_color, linewidth=bracket_width)
+    axis.text(0.50, 0.61, "local solar hour", ha="center", va="center", fontsize=6.8)
+    axis.text(0.50, 0.555, "(sin/cos)", ha="center", va="center", fontsize=6.8)
+    axis.text(0.50, 0.405, "day of year", ha="center", va="center", fontsize=6.8)
+    axis.text(0.50, 0.350, "(sin/cos)", ha="center", va="center", fontsize=6.8)
 
 
 def main() -> None:
@@ -310,6 +326,7 @@ def main() -> None:
         {
             "font.family": "sans-serif",
             "font.size": 7,
+            "mathtext.fontset": "dejavusans",
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -325,10 +342,10 @@ def main() -> None:
         2,
         2,
         left=0.025,
-        right=0.795,
-        bottom=0.075,
-        top=0.94,
-        hspace=0.50,
+        right=0.780,
+        bottom=0.125,
+        top=0.835,
+        hspace=0.58,
         wspace=0.10,
     )
     _plot_scalar_sequence(
@@ -351,7 +368,8 @@ def main() -> None:
         normalization=_robust_normalization(temperature),
     )
     _plot_residual_sequence(figure, layout[1, 1], residuals)
-    _add_behavior_label(figure, label, nox_delta)
+    _plot_temporal_features(figure)
+    _add_sample_target(figure, label, nox_delta)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     figure.savefig(OUTPUT_STEM.with_suffix(".pdf"))
