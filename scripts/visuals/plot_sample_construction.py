@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from matplotlib import colors
 from modeling.dataset import NormalizationStats, NOxDataset
-from modeling.train import _load_masked_checkpoint
+from modeling.train import _bilinear_interpolation_fill
 from modeling.transport import TransportConfig, TransportTransform
 
 from config import MODEL_CLASS_NAMES, MODEL_IMAGE_KEYS, RUNS_DIR
@@ -51,36 +51,26 @@ def _load_example() -> tuple[np.ndarray, np.ndarray, str, float]:
     # Recreate EDA example 4 through the recorded model-input pipeline
     run_config = _load_json(RUN_DIR / "run_config.json")
     stats = NormalizationStats.from_dict(_load_json(RUN_DIR / "normalization_stats.json"))
-    checkpoint_path = Path(str(run_config["pretrained_masked_model_weights"]))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint, model = _load_masked_checkpoint(checkpoint_path, device)
-    masked_stats = checkpoint["normalization_stats"]
-    dataset = NOxDataset("train", stats, source_image_stats=masked_stats)
+    dataset = NOxDataset("train", stats)
     image, _, _, label_index, _ = dataset[EXAMPLE_TRAIN_INDEX]
-    image = image.unsqueeze(0).to(device)
+    image = image.unsqueeze(0)
 
     batch_size, timesteps, channels, height, width = image.shape
     frames = image.reshape(batch_size * timesteps, channels, height, width)
-    with torch.inference_mode():
-        completed_no2 = model.fill_missing(frames)
+    completed_no2 = _bilinear_interpolation_fill(frames)
     completed = frames.clone()
     completed[:, :1] = completed_no2
     completed = completed.reshape(batch_size, timesteps, channels, height, width).float()
 
-    masked_center = torch.as_tensor(masked_stats["image_center"], dtype=completed.dtype, device=device)
-    masked_scale = torch.as_tensor(masked_stats["image_scale"], dtype=completed.dtype, device=device)
+    image_center = torch.as_tensor(stats.image_center, dtype=completed.dtype)
+    image_scale = torch.as_tensor(stats.image_scale, dtype=completed.dtype)
     numeric_channels = len(MODEL_IMAGE_KEYS)
     physical = (
-        completed[:, :, :numeric_channels] * masked_scale[None, None, :, None, None]
-        + masked_center[None, None, :, None, None]
+        completed[:, :, :numeric_channels] * image_scale[None, None, :, None, None]
+        + image_center[None, None, :, None, None]
     )
-
-    classifier_center = torch.as_tensor(stats.image_center, dtype=completed.dtype, device=device)
-    classifier_scale = torch.as_tensor(stats.image_scale, dtype=completed.dtype, device=device)
-    classifier_input = completed.clone()
-    classifier_input[:, :, :numeric_channels] = (
-        physical - classifier_center[None, None, :, None, None]
-    ) / classifier_scale[None, None, :, None, None]
+    classifier_input = completed.to(device)
 
     transport_metadata = run_config["transport"]
     transport = TransportTransform(
@@ -101,7 +91,7 @@ def _load_example() -> tuple[np.ndarray, np.ndarray, str, float]:
             no2_center_scale,
         )
     return (
-        physical[0].cpu().numpy(),
+        physical[0].numpy(),
         residuals[0, :, 0].cpu().numpy(),
         MODEL_CLASS_NAMES[int(label_index)],
         float(
@@ -292,7 +282,7 @@ def _add_sample_target(figure: plt.Figure, label: str, nox_delta: float) -> None
     header_axis.text(
         0.500,
         0.65,
-        rf"Behavior Class: $\mathbf{{{label.upper()}}}$ (NO$_x$ delta: {nox_delta:+.1f} lb/hr)",
+        f"Behavior Class: {label.capitalize()} (NO$_x$ delta: {nox_delta:+.1f} lb/hr)",
         ha="center",
         va="center",
         fontsize=8.0,
@@ -308,16 +298,22 @@ def _plot_temporal_features(figure: plt.Figure) -> None:
     axis.set_title("(e) Tabular temporal\nfeatures", fontsize=7.2, fontweight="normal", pad=4)
     bracket_color = "#4A4A4A"
     bracket_width = 0.9
-    axis.plot((0.20, 0.20), (0.29, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.20, 0.25), (0.67, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.20, 0.25), (0.29, 0.29), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.80, 0.80), (0.29, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.75, 0.80), (0.67, 0.67), color=bracket_color, linewidth=bracket_width)
-    axis.plot((0.75, 0.80), (0.29, 0.29), color=bracket_color, linewidth=bracket_width)
-    axis.text(0.50, 0.61, "local solar hour", ha="center", va="center", fontsize=6.8)
-    axis.text(0.50, 0.555, "(sin/cos)", ha="center", va="center", fontsize=6.8)
-    axis.text(0.50, 0.405, "day of year", ha="center", va="center", fontsize=6.8)
-    axis.text(0.50, 0.350, "(sin/cos)", ha="center", va="center", fontsize=6.8)
+    bracket_bottom = 0.37
+    bracket_top = 0.61
+    axis.plot((0.06, 0.06), (bracket_bottom, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.06, 0.10), (bracket_top, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.06, 0.10), (bracket_bottom, bracket_bottom), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.94, 0.94), (bracket_bottom, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.90, 0.94), (bracket_top, bracket_top), color=bracket_color, linewidth=bracket_width)
+    axis.plot((0.90, 0.94), (bracket_bottom, bracket_bottom), color=bracket_color, linewidth=bracket_width)
+    feature_labels = (
+        "sin(local solar hour)",
+        "cos(local solar hour)",
+        "sin(day of year)",
+        "cos(day of year)",
+    )
+    for position, feature_label in zip((0.575, 0.520, 0.465, 0.410), feature_labels, strict=True):
+        axis.text(0.50, position, feature_label, ha="center", va="center", fontsize=5.8)
 
 
 def main() -> None:

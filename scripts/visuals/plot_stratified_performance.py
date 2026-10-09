@@ -16,8 +16,13 @@ plt.switch_backend("Agg")
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
-OUTPUT_STEM = OUTPUT_DIR / "stratified-performance"
-RUN_DIR = Path("/global/home/users/pranavwalimbe/model_runs/classification_only_zscore_20261006_202419")
+OUTPUT_STEMS = (
+    OUTPUT_DIR / "stratified-performance-monthly",
+    OUTPUT_DIR / "stratified-performance-solar-hour",
+    OUTPUT_DIR / "stratified-performance-aoi-nox",
+    OUTPUT_DIR / "stratified-performance-census-region",
+)
+RUN_DIR = Path("/global/home/users/pranavwalimbe/model_runs/classification_only_zscore_20261007_202105")
 
 MODEL_NAMES = ("Baseline MLP", "ConvGRU")
 MODEL_FILES = ("seasonal_test_predictions.csv", "test_predictions.csv")
@@ -42,10 +47,11 @@ PREDICTION_COLUMNS = (
 )
 
 CLASS_LABELS = np.arange(3)
-QUARTILE_NAMES = ("Q1", "Q2", "Q3", "Q4")
+AOI_HALF_NAMES = ("Lower 50%", "Upper 50%")
 Y_LIMITS = (0.28, 0.72)
 Y_TICKS = np.arange(0.3, 0.71, 0.1)
 DEGREES_PER_SOLAR_HOUR = 15.0
+PANEL_FIGURE_SIZE = (3.35, 2.55)
 
 CENSUS_REGION_STATES = (
     ("Northeast", frozenset(("CT", "ME", "MA", "NH", "RI", "VT", "NJ", "NY", "PA"))),
@@ -106,22 +112,22 @@ def _format_boundary(value: float) -> str:
     return f"{value:.1f}"
 
 
-def _quartile_scores(
+def _aoi_half_scores(
     frames: dict[str, pd.DataFrame],
     values: pd.Series,
 ) -> tuple[list[str], dict[str, np.ndarray]]:
-    # Form AOI-balanced quartiles and score their associated records
+    # Split AOIs at the median and score their associated records
     percentiles = values.rank(method="average", pct=True)
     strata = pd.cut(
         percentiles,
-        bins=(0.0, 0.25, 0.5, 0.75, 1.0),
-        labels=QUARTILE_NAMES,
+        bins=(0.0, 0.5, 1.0),
+        labels=AOI_HALF_NAMES,
         include_lowest=True,
     )
     reference = frames[MODEL_NAMES[0]]
     tick_labels: list[str] = []
     scores = {model_name: [] for model_name in MODEL_NAMES}
-    for stratum_name in QUARTILE_NAMES:
+    for stratum_name in AOI_HALF_NAMES:
         aoi_ids = values.index[strata == stratum_name]
         mask = reference["aoi_id"].isin(aoi_ids)
         lower = _format_boundary(float(values.loc[aoi_ids].min()))
@@ -308,8 +314,18 @@ def _plot_bar_panel(
     axis.spines[["top", "right"]].set_visible(False)
 
 
+def _save_panel(figure: plt.Figure, axis: plt.Axes, output_stem: Path) -> None:
+    # Add the standalone legend and save both publication formats
+    handles, labels = axis.get_legend_handles_labels()
+    figure.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.88))
+    figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    figure.savefig(output_stem.with_suffix(".png"), dpi=450, bbox_inches="tight")
+    plt.close(figure)
+
+
 def main() -> None:
-    """Generate PDF and PNG versions of the stratified performance figure."""
+    """Generate four standalone stratified-performance figures."""
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -338,16 +354,11 @@ def main() -> None:
             "Midpoint local solar hour",
             "Accuracy",
         ),
-        (
-            *_quartile_scores(frames, aoi["aoi_score"]),
-            r"(c) Macro F1 by AOI median NO$_x$",
-            r"AOI quartile (lb hr$^{-1}$ range)",
-            "Macro F1",
-        ),
     )
 
-    figure, axes = plt.subplots(2, 2, figsize=(7.15, 4.15), sharey=True)
-    for axis, (tick_labels, scores, title, x_label, y_label) in zip(axes.ravel(), panels):
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for output_stem, (tick_labels, scores, title, x_label, y_label) in zip(OUTPUT_STEMS[:2], panels, strict=True):
+        figure, axis = plt.subplots(figsize=PANEL_FIGURE_SIZE)
         _plot_panel(
             axis,
             tick_labels,
@@ -356,23 +367,31 @@ def main() -> None:
             x_label=x_label,
             y_label=y_label,
         )
-    region_labels, region_scores = _census_region_scores(frames, aoi.index)
+        _save_panel(figure, axis, output_stem)
+
+    aoi_labels, aoi_scores = _aoi_half_scores(frames, aoi["aoi_score"])
+    figure, axis = plt.subplots(figsize=PANEL_FIGURE_SIZE)
     _plot_bar_panel(
-        axes[1, 1],
+        axis,
+        aoi_labels,
+        aoi_scores,
+        title=r"(c) Macro F1 by AOI median NO$_x$",
+        x_label=r"AOI median NO$_x$ group (lb hr$^{-1}$ range)",
+        y_label="Macro F1",
+    )
+    _save_panel(figure, axis, OUTPUT_STEMS[2])
+
+    region_labels, region_scores = _census_region_scores(frames, aoi.index)
+    figure, axis = plt.subplots(figsize=PANEL_FIGURE_SIZE)
+    _plot_bar_panel(
+        axis,
         region_labels,
         region_scores,
         title="(d) Macro F1 by AOI-center Census region",
         x_label="Census region",
         y_label="Macro F1",
     )
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    figure.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.93), h_pad=1.6, w_pad=1.4)
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    figure.savefig(OUTPUT_STEM.with_suffix(".pdf"), bbox_inches="tight")
-    figure.savefig(OUTPUT_STEM.with_suffix(".png"), dpi=450, bbox_inches="tight")
-    plt.close(figure)
+    _save_panel(figure, axis, OUTPUT_STEMS[3])
 
 
 if __name__ == "__main__":

@@ -99,10 +99,6 @@ MIN_TIMESTEP_NO2_FINITE_FRACTION = 0.85  # inclusive coverage floor applied inde
 # Delta-model training contract
 # ============================================================================
 RUNS_DIR = "/global/home/users/pranavwalimbe/model_runs/"  # output directory for model checkpoints and results
-PRETRAINED_MASKED_MODEL_WEIGHTS = os.getenv(  # masked-model checkpoint for gap filling and optional transfer
-    "PRETRAINED_MASKED_MODEL_WEIGHTS",
-    "/global/home/users/pranavwalimbe/masked_model_runs/a40/masked_no2_20260924_183700/checkpoints/best_masked_no2.pt",
-)
 SEQUENCE_TIMESTEPS = 5  # five causal rasters spanning the early and late label windows
 MODEL_IMAGE_KEYS = ("no2", "temperature_2m_k", "wind_u_80m_mps", "wind_v_80m_mps")
 MODEL_MASK_KEYS = ("no2_mask",)

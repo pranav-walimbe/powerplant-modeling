@@ -1,9 +1,9 @@
 # Modeling
 
 The delta trainer compares two classifiers on the same geographic splits and
-fixed seed. A pretrained masked model fills low-quality NO2 pixels before
-classifier training. The classifier still receives the original NO2 quality
-mask, so it can distinguish observations from filled values.
+fixed seed. Separable bilinear interpolation fills low-quality NO2 pixels before
+classifier training. The classifier also receives the original NO2 quality mask
+so it can distinguish observations from filled values.
 
 ## Contract
 
@@ -15,7 +15,7 @@ mask, so it can distinguish observations from filled values.
 | Observation channels | Filled NO2, NO2 quality, wind-u, wind-v, temperature |
 | Transport sequence | Four advection residuals and residual-quality rasters |
 | Seasonal context | Midpoint day of year and local solar hour |
-| Loss | Weighted class cross-entropy plus two-channel unbalanced Sinkhorn divergence |
+| Loss | Training-prevalence-weighted class cross-entropy |
 | Selection | Highest validation macro F1; weighted validation loss breaks ties |
 | Primary result | Context-aware vision classifier |
 
@@ -26,18 +26,16 @@ statistics.
 
 ## Raster completion and quality
 
-The masked model uses its checkpoint's global statistics to fill NO2. Training
-stores five channels in job-local memory-mapped arrays: four inputs in the
-masked model's normalized space plus the original NO2 mask. Observed pixels
-receive quality 1; filled pixels receive quality 0. The classifier processes
-every filled value and uses quality as a separate input channel.
+The classifier pipeline fits a global mean and population standard deviation to
+every raster channel using only the training split. It then fills missing NO2
+with the mean of horizontal and vertical linear interpolation in that frozen
+normalized space. Rows or columns without visible support fall back to the
+frame's visible-pixel mean.
 
-The masked model's checkpoint statistics are used only during raster
-completion. The classifier pipeline fits a global mean and population
-standard deviation to every raster channel, including NO2, using only the
-training split. The completed train, validation, and test rasters are converted
-from the masked model's normalized space into this frozen classifier
-normalization.
+Training stores five channels in job-local memory-mapped arrays: four normalized
+physical inputs plus the original NO2 mask. Observed pixels receive quality 1;
+filled pixels receive quality 0. The classifier processes every filled value and
+uses quality as a separate input channel.
 
 ## Transport residuals
 
@@ -64,7 +62,7 @@ the active transport values directly from the transport configuration.
 The training job fits these models:
 
 - `seasonal`: the context-only MLP diagnostic;
-- `vision`: the joint context-aware class and contribution-raster predictor.
+- `vision`: the context-aware vision classifier.
 
 The observation branch processes five frames, while the residual branch
 processes four transitions without creating a synthetic first residual. Each
@@ -72,61 +70,24 @@ later observation embedding is fused with its aligned residual embedding by a
 `1 x 1` projection before the shared ConvGRU. The classifier pools the final
 recurrent map. A small MLP encodes the sample's midpoint context once, and its
 embedding is concatenated with the pooled visual embedding immediately before
-classification. A separate decoder upsamples only the visual map into bounded
-`24 x 24` decrease and increase contribution rasters. The model width is 64.
+classification. The model width is 64.
 
 Training drops the complete midpoint context embedding for a random share of
 samples. The job also saves predictions and metrics from shuffled-context
 inference.
 
-## Spatial contribution targets
-
-Before training, the pipeline parses `t0_source_pixel_nox` through
-`t4_source_pixel_nox` and aligns facilities by ID. A facility omitted at a
-timestep has zero emissions. It computes the facility's early and late
-elapsed-time-weighted trapezoidal means with the same intervals used by the
-class label, then subtracts early from late.
-
-For an increase sample, positive facility changes are normalized to sum to one
-and Gaussian-splatted into the increase channel. For a decrease sample, the
-magnitudes of negative facility changes are normalized and splatted into the
-decrease channel. The other channel is zero. Both channels are zero for steady
-samples. Thus these are class-conditioned attribution targets: a zero steady
-target does not assert that every facility was unchanged, because opposing
-facility changes may still cancel within the steady threshold.
-
-Source coordinates retain their fractional positions on the `24 x 24` input
-grid. Each clipped Gaussian is renormalized, so the active channel retains unit
-mass even near an AOI edge.
-
 ## Optimization
 
 All classifiers use inverse-frequency class weights computed only from the
 training split. Each class therefore contributes equal total weight to the
-cross-entropy objective. The joint model compares each predicted contribution
-channel with its target using a debiased unbalanced Sinkhorn divergence. This
-penalizes spatially distant mass more than nearby mass, while mass relaxation
-keeps all-zero steady and inactive channels valid. The two channel losses are
-averaged per sample. Its total loss is
-`CE + raster_loss_weight * sinkhorn_loss`; `RASTER_LOSS_WEIGHT` configures this
-weight and defaults to 1.0.
-
-Sinkhorn scaling uses a separable Gaussian kernel in float32, avoiding a dense
-pairwise pixel-cost matrix. `SINKHORN_BLUR_CELLS`, `SINKHORN_REACH_CELLS`, and
-`SINKHORN_ITERATIONS` default to 1.0, 6.0, and 30. The output head starts near
-one unit of total mass across both channels instead of the sigmoid default of
-0.5 per pixel. `CONTRIBUTION_SPLAT_SIGMA` controls target Gaussian width in
-`24 x 24` cells and defaults to 1.0. Set it to zero for nearest-cell targets.
+cross-entropy objective.
 
 Validation macro F1 controls checkpointing and early stopping.
 Training-weighted validation cross-entropy breaks macro-F1 ties and drives the
 learning-rate scheduler. The maintained launcher uses batch size 128, model
 width 64, head width 48, dropout 0.20, learning rate
 `6.0378112892784365e-5`, weight decay `1e-4`, early-stopping patience 10, and
-seed 42. The learning rate, weight decay, dropout, raster-loss weight,
-contribution splat sigma, Sinkhorn blur, and Sinkhorn reach come from trial 22
-of the validation-only hyperparameter study, which achieved validation macro
-F1 0.6225.
+seed 42.
 
 Run the production workflow with:
 
@@ -134,17 +95,19 @@ Run the production workflow with:
 sbatch scripts/slurm/train_model.sh
 ```
 
+Training always fills missing NO2 pixels with separable bilinear interpolation
+in the classifier's training-split normalization. There is no fill-strategy
+CLI option or masked-model checkpoint dependency.
+
 ## Hyperparameter optimization
 
 `modeling.optimize` runs a seeded TPE search with median pruning.
 It reuses train-only normalization and completed train/validation rasters across
 trials. It never loads or evaluates the test split. The search varies learning
-rate, weight decay, dropout, raster-loss weight, contribution splat sigma,
-Sinkhorn blur, and Sinkhorn reach while holding model width at 64.
-Learning rate is sampled log-uniformly from `1e-5` through `1e-4`. The
+rate, weight decay, dropout, and model width.
+Learning rate is sampled log-uniformly from `5e-6` through `2e-4`. The
 categorical choices are weight decay `{1e-4, 1e-3}`, dropout `{0.2, 0.4}`,
-raster-loss weight `{0.5, 1.0}`, splat sigma `{1.0, 1.5}`, Sinkhorn blur
-`{1.0, 1.5}`, and Sinkhorn reach `{3.0, 6.0}`.
+and model width `{32, 64, 96}`.
 
 Run the maintained 24-trial Savio search with:
 

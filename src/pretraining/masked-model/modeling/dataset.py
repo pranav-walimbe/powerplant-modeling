@@ -24,10 +24,9 @@ from config import (
 RASTER_PATH_COL = "raster_bundle_path"
 CACHE_KEY_COL = "cache_key"
 MASKED_IMAGE_KEYS = MODEL_IMAGE_KEYS
-ROBUST_IMAGE_KEYS = ("no2",)
 ORIGINAL_MASK_KEY = "no2_mask"
 MIN_SCALE = 1e-12
-ROBUST_STD_NORMALIZER = 1.349
+NORMALIZATION_METHOD = "zscore"
 MIN_MASK_FRACTION = 0.01
 MAX_MASK_FRACTION = 0.15
 FRONTIER_SELECTION_PROBABILITY = 0.94
@@ -44,6 +43,7 @@ class MaskedNormalizationStats:
     image_scale: tuple[float, ...]
     image_valid_pixels: tuple[int, ...]
     training_records: int
+    normalization_method: str = NORMALIZATION_METHOD
 
     def to_dict(self) -> dict[str, object]:
         """Return normalization state as JSON-safe values."""
@@ -65,7 +65,29 @@ class MaskedNormalizationStats:
             image_scale=tuple(float(value) for value in values["image_scale"]),
             image_valid_pixels=tuple(int(value) for value in values["image_valid_pixels"]),
             training_records=int(values["training_records"]),
+            normalization_method=str(values["normalization_method"]),
         )
+
+
+def _update_moments(
+    values: np.ndarray,
+    count: int,
+    mean: float,
+    sum_squared_deviation: float,
+) -> tuple[float, float]:
+    # Combine one pixel batch with running population moments accumulated over count pixels
+    batch_count = int(values.size)
+    if batch_count == 0:
+        return mean, sum_squared_deviation
+    batch_mean = float(values.mean())
+    batch_squared_deviation = float(np.square(values - batch_mean).sum())
+    combined_count = count + batch_count
+    delta = batch_mean - mean
+    combined_mean = mean + delta * batch_count / combined_count
+    combined_deviation = (
+        sum_squared_deviation + batch_squared_deviation + delta * delta * count * batch_count / combined_count
+    )
+    return combined_mean, combined_deviation
 
 
 def compute_stats(
@@ -88,10 +110,9 @@ def compute_stats(
     paths = frame[RASTER_PATH_COL].to_numpy(dtype=str)
     root = Path(dataset_dir)
     channel_count = len(MASKED_IMAGE_KEYS)
-    robust_channels = tuple(MASKED_IMAGE_KEYS.index(name) for name in ROBUST_IMAGE_KEYS)
     counts = np.zeros(channel_count, dtype=np.int64)
-    sums = np.zeros(channel_count, dtype=np.float64)
-    squared_sums = np.zeros(channel_count, dtype=np.float64)
+    mean = np.zeros(channel_count, dtype=np.float64)
+    sum_squared_deviation = np.zeros(channel_count, dtype=np.float64)
 
     for index, serialized_path in enumerate(paths, start=1):
         path = Path(serialized_path)
@@ -100,38 +121,25 @@ def compute_stats(
             for channel, name in enumerate(MASKED_IMAGE_KEYS):
                 values = np.asarray(bundle[name], dtype=np.float64)
                 valid = values[np.isfinite(values)]
+                mean[channel], sum_squared_deviation[channel] = _update_moments(
+                    valid,
+                    int(counts[channel]),
+                    float(mean[channel]),
+                    float(sum_squared_deviation[channel]),
+                )
                 counts[channel] += valid.size
-                if channel not in robust_channels:
-                    sums[channel] += valid.sum()
-                    squared_sums[channel] += np.square(valid).sum()
         if progress_interval > 0 and (index % progress_interval == 0 or index == len(paths)):
             print(f"Image-statistics scan: {index:,}/{len(paths):,} rasters")
 
-    center = np.divide(sums, counts, out=np.zeros_like(sums), where=counts > 0)
-    variance = np.divide(squared_sums, counts, out=np.zeros_like(sums), where=counts > 0) - np.square(center)
-    scale = np.sqrt(np.maximum(variance, 0.0))
-    with tempfile.TemporaryDirectory(prefix=".masked-no2-quantiles-") as temporary_dir:
-        for channel in robust_channels:
-            values = np.memmap(
-                Path(temporary_dir) / f"channel-{channel}.bin",
-                dtype=np.float32,
-                mode="w+",
-                shape=(int(counts[channel]),),
-            )
-            offset = 0
-            for serialized_path in paths:
-                path = Path(serialized_path)
-                path = path if path.is_absolute() else root / path
-                with np.load(path, allow_pickle=False) as bundle:
-                    raster = np.asarray(bundle[MASKED_IMAGE_KEYS[channel]], dtype=np.float32)
-                valid = raster[np.isfinite(raster)]
-                values[offset : offset + valid.size] = valid
-                offset += valid.size
-            lower, median, upper = np.percentile(values, (25, 50, 75), overwrite_input=True)
-            center[channel] = median
-            scale[channel] = (upper - lower) / ROBUST_STD_NORMALIZER
-            del values
-
+    center = mean.copy()
+    scale = np.sqrt(
+        np.divide(
+            sum_squared_deviation,
+            counts,
+            out=np.zeros_like(sum_squared_deviation),
+            where=counts > 0,
+        )
+    )
     scale = np.where(np.isfinite(scale) & (scale > MIN_SCALE), scale, 1.0)
     return MaskedNormalizationStats(
         image_keys=MASKED_IMAGE_KEYS,

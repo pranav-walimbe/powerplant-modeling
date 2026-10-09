@@ -58,10 +58,10 @@ uncertainty summaries.
 ## Training-time completion
 
 Published NO2 rasters retain their gaps. Delta training normalizes the physical
-channels with the masked-model checkpoint statistics, then passes NO2, weather,
-and `no2_mask` through that reconstruction model. The imputer preserves observed
-NO2 and fills mask gaps.
+channels with training-split statistics, preserves observed NO2, and fills mask
+gaps with separable bilinear interpolation. Rows or columns without visible
+support use the frame's visible-pixel mean.
 
-Training writes the completed four-channel sequences to job-local memory-mapped
-arrays under `/tmp`. Both raster classifiers read those arrays and receive
-`NO2`, temperature, wind U, and wind V. They do not receive `no2_mask`.
+Training writes the completed five-channel sequences to job-local memory-mapped
+arrays under `/tmp`. The vision classifier receives `NO2`, temperature, wind U,
+wind V, and the original `no2_mask` quality channel.
