@@ -2,7 +2,7 @@
 %%% Do NOT edit. File created by BibTeX with style
 %%% ACM-Reference-Format-Journals [18-Jan-2012].
 
-\begin{thebibliography}{16}
+\begin{thebibliography}{19}
 
 %%% ====================================================================
 %%% NOTE TO THE USER: you can override these defaults by providing
@@ -49,6 +49,15 @@
 \href{https://doi.org/10.3390/rs14030729}{doi:\nolinkurl{10.3390/rs14030729}}
 
 
+\bibitem[Ballas et~al\mbox{.}(2015)]%
+        {ballas2015convgru}
+\bibfield{author}{\bibinfo{person}{Nicolas Ballas}, \bibinfo{person}{Li Yao}, \bibinfo{person}{Chris Pal}, {and} \bibinfo{person}{Aaron Courville}.} \bibinfo{year}{2015}\natexlab{}.
+\newblock \bibinfo{title}{Delving Deeper into Convolutional Networks for Learning Video Representations}.
+\newblock
+\showeprint[arxiv]{1511.06432}~[cs.LG]
+\href{https://doi.org/10.48550/arXiv.1511.06432}{doi:\nolinkurl{10.48550/arXiv.1511.06432}}
+
+
 \bibitem[Beaudry et~al\mbox{.}(2026)]%
         {beaudry2026quantification}
 \bibfield{author}{\bibinfo{person}{Samuel~James Beaudry}, \bibinfo{person}{Qindan Zhu}, {and} \bibinfo{person}{Ronald~C. Cohen}.} \bibinfo{year}{2026}\natexlab{}.
@@ -59,13 +68,11 @@
 \shownote{EarthArXiv preprint}.
 
 
-\bibitem[Bruno et~al\mbox{.}(2024)]%
-        {bruno2024uplume}
-\bibfield{author}{\bibinfo{person}{Jack~H. Bruno}, \bibinfo{person}{Dylan Jervis}, \bibinfo{person}{Daniel~J. Varon}, {and} \bibinfo{person}{Daniel~J. Jacob}.} \bibinfo{year}{2024}\natexlab{}.
-\newblock \showarticletitle{{U-Plume}: Automated Algorithm for Plume Detection and Source Quantification by Satellite Point-Source Imagers}.
-\newblock \bibinfo{journal}{\emph{Atmospheric Measurement Techniques}}  \bibinfo{volume}{17} (\bibinfo{year}{2024}), \bibinfo{pages}{2625--2636}.
+\bibitem[Bertasius et~al\mbox{.}(2021)]%
+        {bertasius2021timesformer}
+\bibfield{author}{\bibinfo{person}{Gedas Bertasius}, \bibinfo{person}{Heng Wang}, {and} \bibinfo{person}{Lorenzo Torresani}.} \bibinfo{year}{2021}\natexlab{}.
+\newblock \showarticletitle{Is Space-Time Attention All You Need for Video Understanding?}. In \bibinfo{booktitle}{\emph{Proceedings of the 38th International Conference on Machine Learning}} \emph{(\bibinfo{series}{Proceedings of Machine Learning Research}, Vol.~\bibinfo{volume}{139})}. \bibinfo{publisher}{PMLR}, \bibinfo{address}{Virtual Event}, \bibinfo{pages}{813--824}.
 \newblock
-\href{https://doi.org/10.5194/amt-17-2625-2024}{doi:\nolinkurl{10.5194/amt-17-2625-2024}}
 
 
 \bibitem[Dumont Le~Brazidec et~al\mbox{.}(2024)]%
@@ -104,6 +111,15 @@
 \href{https://doi.org/10.1109/TGRS.2006.872333}{doi:\nolinkurl{10.1109/TGRS.2006.872333}}
 
 
+\bibitem[Meier et~al\mbox{.}(2024)]%
+        {meier2024conversion}
+\bibfield{author}{\bibinfo{person}{Samuel Meier}, \bibinfo{person}{E.~F.~M. Koene}, \bibinfo{person}{Maarten Krol}, \bibinfo{person}{Dominik Brunner}, \bibinfo{person}{Alexander Damm}, {and} \bibinfo{person}{Gerrit Kuhlmann}.} \bibinfo{year}{2024}\natexlab{}.
+\newblock \showarticletitle{A Lightweight {NO$_2$}-to-{NO$_x$} Conversion Model for Quantifying {NO$_x$} Emissions of Point Sources from {NO$_2$} Satellite Observations}.
+\newblock \bibinfo{journal}{\emph{Atmospheric Chemistry and Physics}}  \bibinfo{volume}{24} (\bibinfo{year}{2024}), \bibinfo{pages}{7667--7686}.
+\newblock
+\href{https://doi.org/10.5194/acp-24-7667-2024}{doi:\nolinkurl{10.5194/acp-24-7667-2024}}
+
+
 \bibitem[Santaren et~al\mbox{.}(2025)]%
         {santaren2025benchmarking}
 \bibfield{author}{\bibinfo{person}{D. Santaren}, \bibinfo{person}{J. Hakkarainen}, \bibinfo{person}{G. Kuhlmann}, \bibinfo{person}{E. Koene}, \bibinfo{person}{F. Chevallier}, \bibinfo{person}{I. Ialongo}, \bibinfo{person}{H. Lindqvist}, \bibinfo{person}{J. Nurmela}, \bibinfo{person}{J. Tamminen}, \bibinfo{person}{L. Amor{\'o}s}, \bibinfo{person}{D. Brunner}, {and} \bibinfo{person}{G. Broquet}.} \bibinfo{year}{2025}\natexlab{}.
@@ -111,6 +127,13 @@
 \newblock \bibinfo{journal}{\emph{Atmospheric Measurement Techniques}}  \bibinfo{volume}{18} (\bibinfo{year}{2025}), \bibinfo{pages}{211--239}.
 \newblock
 \href{https://doi.org/10.5194/amt-18-211-2025}{doi:\nolinkurl{10.5194/amt-18-211-2025}}
+
+
+\bibitem[Shi et~al\mbox{.}(2015)]%
+        {shi2015convlstm}
+\bibfield{author}{\bibinfo{person}{Xingjian Shi}, \bibinfo{person}{Zhourong Chen}, \bibinfo{person}{Hao Wang}, \bibinfo{person}{Dit-Yan Yeung}, \bibinfo{person}{Wai-Kin Wong}, {and} \bibinfo{person}{Wang-Chun Woo}.} \bibinfo{year}{2015}\natexlab{}.
+\newblock \showarticletitle{Convolutional {LSTM} Network: A Machine Learning Approach for Precipitation Nowcasting}. In \bibinfo{booktitle}{\emph{Advances in Neural Information Processing Systems}}, Vol.~\bibinfo{volume}{28}. \bibinfo{publisher}{Curran Associates, Inc.}, \bibinfo{address}{Montreal, Canada}, \bibinfo{pages}{802--810}.
+\newblock
 
 
 \bibitem[Sun et~al\mbox{.}(2025)]%
