@@ -48,12 +48,13 @@ def _plot_grouped_bars(
     positions = np.concatenate(
         [split_start + np.arange(category_count) for split_start in split_starts]
     )
-    bar_width = 0.38
+    bar_width = 0.30
+    model_offset = 0.25
 
     for model_index, (model_name, color, hatch) in enumerate(
         zip(MODEL_NAMES, MODEL_COLORS, MODEL_HATCHES, strict=True)
     ):
-        offset = (model_index - 0.5) * bar_width
+        offset = -model_offset if model_index == 0 else model_offset
         bars = axis.bar(
             positions + offset,
             values[model_index].reshape(-1),
@@ -64,7 +65,16 @@ def _plot_grouped_bars(
             label=model_name,
             linewidth=0.6,
         )
-        axis.bar_label(bars, fmt="%.3f", padding=2 + 5 * model_index, fontsize=6.5)
+        for bar in bars:
+            axis.annotate(
+                f"{bar.get_height():.3f}",
+                (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                xytext=(0, 2),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=6,
+            )
 
     axis.set_xticks(positions, category_names * len(SPLIT_NAMES))
     axis.set_ylim(0.0, 0.85)
