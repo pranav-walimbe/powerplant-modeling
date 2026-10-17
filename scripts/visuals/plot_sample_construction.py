@@ -21,9 +21,10 @@ plt.switch_backend("Agg")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
 OUTPUT_STEM = OUTPUT_DIR / "sample-construction"
-RUN_DIR = Path(RUNS_DIR) / "classification_only_zscore_20261006_205047"
+RUN_DIR = Path(RUNS_DIR) / "classification_only_zscore_20261007_202105"
 
 EXAMPLE_TRAIN_INDEX = 27_621
+EXAMPLE_AOI_ID = 6_041
 NO2_DISPLAY_SCALE = 1.0e15
 WIND_ARROW_STEP = 4
 FIGURE_WIDTH = 7.15
@@ -90,14 +91,14 @@ def _load_example() -> tuple[np.ndarray, np.ndarray, str, float]:
             elapsed_hours,
             no2_center_scale,
         )
+    row = dataset.frame.iloc[EXAMPLE_TRAIN_INDEX]
+    if int(row["aoi_id"]) != EXAMPLE_AOI_ID:
+        raise ValueError(f"Training row {EXAMPLE_TRAIN_INDEX:,} is not AOI {EXAMPLE_AOI_ID}")
     return (
         physical[0].numpy(),
         residuals[0, :, 0].cpu().numpy(),
         MODEL_CLASS_NAMES[int(label_index)],
-        float(
-            dataset.frame.iloc[EXAMPLE_TRAIN_INDEX]["avg_nox_end"]
-            - dataset.frame.iloc[EXAMPLE_TRAIN_INDEX]["avg_nox_start"]
-        ),
+        float(row["avg_nox_end"] - row["avg_nox_start"]),
     )
 
 
@@ -174,7 +175,7 @@ def _plot_scalar_sequence(
     layout = slot.subgridspec(
         6,
         5,
-        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.08),
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.045),
         hspace=0.0,
         wspace=0.06,
     )
@@ -186,7 +187,7 @@ def _plot_scalar_sequence(
         _format_raster_axis(axis)
     _add_colorbar(
         figure,
-        figure.add_subplot(layout[5, :]),
+        figure.add_subplot(layout[5, 1:4]),
         normalization,
         color_map,
         colorbar_label,
@@ -199,13 +200,15 @@ def _plot_wind_sequence(
     wind_u: np.ndarray,
     wind_v: np.ndarray,
 ) -> None:
-    # Combine wind magnitude and direction in each timestep raster
+    # Use color for speed and fixed-length arrows for direction
     speed = np.hypot(wind_u, wind_v)
+    direction_u = np.divide(wind_u, speed, out=np.zeros_like(wind_u), where=speed > 0)
+    direction_v = np.divide(wind_v, speed, out=np.zeros_like(wind_v), where=speed > 0)
     normalization = _robust_normalization(speed)
     layout = slot.subgridspec(
         6,
         5,
-        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.08),
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.045),
         hspace=0.0,
         wspace=0.06,
     )
@@ -222,19 +225,20 @@ def _plot_wind_sequence(
         axis.quiver(
             arrow_x,
             arrow_y,
-            wind_u[timestep][arrow_slice],
-            wind_v[timestep][arrow_slice],
+            direction_u[timestep][arrow_slice],
+            direction_v[timestep][arrow_slice],
             color="white",
             angles="xy",
             scale_units="xy",
-            scale=3.5,
+            scale=0.43,
             width=0.010,
             headwidth=3.0,
+            pivot="middle",
         )
         _format_raster_axis(axis)
     _add_colorbar(
         figure,
-        figure.add_subplot(layout[5, :]),
+        figure.add_subplot(layout[5, 1:4]),
         normalization,
         "magma",
         r"80 m wind speed (m s$^{-1}$)",
@@ -252,7 +256,7 @@ def _plot_residual_sequence(
     layout = slot.subgridspec(
         6,
         4,
-        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.08),
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.045),
         hspace=0.0,
         wspace=0.06,
     )
@@ -268,7 +272,7 @@ def _plot_residual_sequence(
         _format_raster_axis(axis)
     _add_colorbar(
         figure,
-        figure.add_subplot(layout[5, :]),
+        figure.add_subplot(layout[5, 1:3]),
         normalization,
         "RdBu_r",
         r"Transport residual ($10^{15}$ molecules cm$^{-2}$)",
@@ -276,13 +280,13 @@ def _plot_residual_sequence(
 
 
 def _add_sample_target(figure: plt.Figure, label: str, nox_delta: float) -> None:
-    # Place the target and its determining change on one header line
-    header_axis = figure.add_axes((0.0, 0.900, 1.0, 0.090), zorder=20)
+    # Place the target and its determining change in the figure header
+    header_axis = figure.add_axes((0.0, 0.895, 1.0, 0.090), zorder=20)
     header_axis.set_axis_off()
     header_axis.text(
         0.500,
-        0.65,
-        f"Behavior Class: {label.capitalize()} (NO$_x$ delta: {nox_delta:+.1f} lb/hr)",
+        0.50,
+        f"Behavior Class: {label.capitalize()} ($\\Delta$NO$_x$: {nox_delta:+.1f} lb/hr)",
         ha="center",
         va="center",
         fontsize=8.0,
