@@ -62,20 +62,16 @@ def _project_footprints(grid: AoiGrid, pixels: GranulePixels) -> tuple[np.ndarra
     return vertices, accepted
 
 
-def _format_map_axis(axis: plt.Axes, *, show_y_label: bool) -> None:
+def _format_map_axis(axis: plt.Axes) -> None:
     # Keep both panels in the same physical coordinate frame
     half_extent = IMG_RANGE / 2
     axis.set(
         xlim=(-half_extent, half_extent),
         ylim=(-half_extent, half_extent),
         aspect="equal",
-        xticks=(-half_extent, 0, half_extent),
-        yticks=(-half_extent, 0, half_extent),
-        xlabel="East-west distance (km)",
+        xticks=(),
+        yticks=(),
     )
-    if show_y_label:
-        axis.set_ylabel("North-south distance (km)")
-    axis.tick_params(labelsize=6.5, length=2.5)
     axis.spines[["top", "right"]].set_visible(False)
 
 
@@ -112,7 +108,8 @@ def main() -> None:
     native_axis = figure.add_subplot(layout[0, 0])
     process_axis = figure.add_subplot(layout[0, 1])
     grid_axis = figure.add_subplot(layout[0, 2])
-    colorbar_axis = figure.add_subplot(layout[2, :])
+    colorbar_layout = layout[2, :].subgridspec(1, 3, width_ratios=(0.2, 0.6, 0.2))
+    colorbar_axis = figure.add_subplot(colorbar_layout[0, 1])
 
     face_colors = np.tile(colors.to_rgba("#D9D9D9"), (len(vertices), 1))
     face_colors[accepted] = color_map(normalization(accepted_values))
@@ -135,7 +132,7 @@ def main() -> None:
         native_axis.axhline(edge, color="white", linewidth=0.20, alpha=0.42, zorder=3)
     native_axis.set_facecolor("#D9D9D9")
     native_axis.set_title("(a) Native TEMPO Level 2 footprints", pad=5)
-    _format_map_axis(native_axis, show_y_label=True)
+    _format_map_axis(native_axis)
 
     half_extent = IMG_RANGE / 2
     image = grid_axis.imshow(
@@ -148,7 +145,7 @@ def main() -> None:
     )
     grid_axis.set_facecolor("#D9D9D9")
     grid_axis.set_title("(b) Area-weighted 3 km grid", pad=5)
-    _format_map_axis(grid_axis, show_y_label=False)
+    _format_map_axis(grid_axis)
 
     process_axis.set_axis_off()
     process_axis.text(
