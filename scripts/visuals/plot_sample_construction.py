@@ -158,6 +158,10 @@ def _add_colorbar(
     )
     colorbar.set_label(label, fontsize=5.8, labelpad=0.5)
     colorbar.ax.tick_params(labelsize=5.3, length=1.8, pad=1)
+    tick_labels = colorbar.ax.get_xticklabels()
+    if tick_labels:
+        tick_labels[0].set_ha("left")
+        tick_labels[-1].set_ha("right")
     colorbar.outline.set_linewidth(0.35)
 
 
@@ -175,7 +179,7 @@ def _plot_scalar_sequence(
     layout = slot.subgridspec(
         6,
         5,
-        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.045),
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.065),
         hspace=0.0,
         wspace=0.06,
     )
@@ -208,7 +212,7 @@ def _plot_wind_sequence(
     layout = slot.subgridspec(
         6,
         5,
-        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.045),
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.065),
         hspace=0.0,
         wspace=0.06,
     )
@@ -256,7 +260,7 @@ def _plot_residual_sequence(
     layout = slot.subgridspec(
         6,
         4,
-        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.045),
+        height_ratios=(0.22, 0.13, 0.06, 1.0, 0.10, 0.065),
         hspace=0.0,
         wspace=0.06,
     )
