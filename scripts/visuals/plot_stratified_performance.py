@@ -382,7 +382,7 @@ def _save_change_magnitude_figure(frames: dict[str, pd.DataFrame]) -> None:
         axis,
         tick_labels,
         scores,
-        title=r"F1 by NO$_x$ delta magnitude",
+        title=r"F1 by NO$_x$ change magnitude",
         x_label="",
         y_label="F1 Score",
         y_limits=(0.28, 0.90),
