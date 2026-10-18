@@ -19,7 +19,7 @@ OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
 OUTPUT_STEMS = (
     OUTPUT_DIR / "stratified-performance-monthly",
     OUTPUT_DIR / "stratified-performance-solar-hour",
-    OUTPUT_DIR / "stratified-performance-aoi-nox",
+    OUTPUT_DIR / "stratified-performance-change-magnitude",
     OUTPUT_DIR / "stratified-performance-census-region",
 )
 RUN_DIR = Path("/global/home/users/pranavwalimbe/model_runs/classification_only_zscore_20261007_202105")
@@ -38,8 +38,9 @@ FINAL_TIMESTAMP_COLUMN = "t4_timestamp"
 ALIGNMENT_COLUMNS = ("aoi_id", "raster_bundle_path", TRUE_CLASS_COLUMN)
 PREDICTION_COLUMNS = (
     "aoi_id",
-    "aoi_score",
     "lon",
+    "avg_nox_start",
+    "avg_nox_end",
     FIRST_TIMESTAMP_COLUMN,
     FINAL_TIMESTAMP_COLUMN,
     "raster_bundle_path",
@@ -48,7 +49,8 @@ PREDICTION_COLUMNS = (
 )
 
 CLASS_LABELS = np.arange(3)
-AOI_HALF_NAMES = ("Lower 50%", "Upper 50%")
+CHANGE_CLASS_LABELS = np.asarray((0, 2))
+CHANGE_HALF_NAMES = ("Lower 50%", "Upper 50%")
 Y_LIMITS = (0.28, 0.72)
 Y_TICKS = np.arange(0.3, 0.71, 0.1)
 DEGREES_PER_SOLAR_HOUR = 15.0
@@ -100,43 +102,44 @@ def _accuracy(frame: pd.DataFrame) -> float:
     return float((frame[TRUE_CLASS_COLUMN] == frame[PREDICTED_CLASS_COLUMN]).mean())
 
 
-def _aoi_characteristics(reference: pd.DataFrame) -> pd.DataFrame:
-    # Derive one set of static characteristics for each test AOI
-    return reference.groupby("aoi_id", sort=True)[["aoi_score"]].first()
-
-
-def _aoi_half_scores(
+def _change_magnitude_scores(
     frames: dict[str, pd.DataFrame],
-    values: pd.Series,
-) -> tuple[list[str], dict[str, np.ndarray], np.ndarray]:
-    # Calculate scores and true-class counts for median-split AOI groups
-    percentiles = values.rank(method="average", pct=True)
-    strata = pd.cut(
-        percentiles,
-        bins=(0.0, 0.5, 1.0),
-        labels=AOI_HALF_NAMES,
-        include_lowest=True,
-    )
+) -> tuple[list[str], dict[str, np.ndarray]]:
+    # Split each change class at its median absolute NOx change
     reference = frames[MODEL_NAMES[0]]
     tick_labels: list[str] = []
     scores = {model_name: [] for model_name in MODEL_NAMES}
-    class_counts: list[np.ndarray] = []
-    for stratum_name in AOI_HALF_NAMES:
-        aoi_ids = values.index[strata == stratum_name]
-        mask = reference["aoi_id"].isin(aoi_ids)
-        tick_labels.append(stratum_name)
-        class_counts.append(
-            np.bincount(
-                reference.loc[mask, TRUE_CLASS_COLUMN].to_numpy(dtype=np.int64),
-                minlength=len(MODEL_CLASS_NAMES),
-            )
+    for class_index in CHANGE_CLASS_LABELS:
+        class_mask = reference[TRUE_CLASS_COLUMN] == class_index
+        change_magnitude = (
+            reference.loc[class_mask, "avg_nox_end"] - reference.loc[class_mask, "avg_nox_start"]
+        ).abs()
+        strata = pd.qcut(
+            change_magnitude.rank(method="first"),
+            q=2,
+            labels=CHANGE_HALF_NAMES,
         )
-        for model_name in MODEL_NAMES:
-            scores[model_name].append(_macro_f1(frames[model_name].loc[mask]))
+        class_name = MODEL_CLASS_NAMES[class_index].title()
+        for stratum_name in CHANGE_HALF_NAMES:
+            record_indices = strata.index[strata == stratum_name]
+            tick_labels.append(f"{class_name}\n{stratum_name}")
+            for model_name in MODEL_NAMES:
+                frame = frames[model_name].loc[record_indices]
+                scores[model_name].append(
+                    float(
+                        f1_score(
+                            frame[TRUE_CLASS_COLUMN],
+                            frame[PREDICTED_CLASS_COLUMN],
+                            labels=[class_index],
+                            average="macro",
+                            zero_division=0,
+                        )
+                    )
+                )
     score_arrays = {
         model_name: np.asarray(model_scores, dtype=np.float64) for model_name, model_scores in scores.items()
     }
-    return tick_labels, score_arrays, np.stack(class_counts)
+    return tick_labels, score_arrays
 
 
 def _monthly_scores(
@@ -286,6 +289,8 @@ def _plot_bar_panel(
     title: str,
     x_label: str,
     y_label: str,
+    y_limits: tuple[float, float] = Y_LIMITS,
+    y_ticks: np.ndarray = Y_TICKS,
 ) -> None:
     # Plot paired bars for unordered strata
     positions = np.arange(len(tick_labels), dtype=np.float64)
@@ -313,8 +318,8 @@ def _plot_bar_panel(
         ylabel=y_label,
         xticks=positions,
         xticklabels=tick_labels,
-        ylim=Y_LIMITS,
-        yticks=Y_TICKS,
+        ylim=y_limits,
+        yticks=y_ticks,
     )
     axis.grid(axis="y", color="#D9D9D9", linewidth=0.55)
     axis.set_axisbelow(True)
@@ -369,33 +374,21 @@ def _save_panel(figure: plt.Figure, axis: plt.Axes, output_stem: Path) -> None:
     plt.close(figure)
 
 
-def _save_aoi_nox_figure(
-    frames: dict[str, pd.DataFrame],
-    aoi_scores: pd.Series,
-) -> None:
-    # Save the joint AOI NOx performance and composition figure
-    tick_labels, scores, counts = _aoi_half_scores(frames, aoi_scores)
-    figure, axes = plt.subplots(2, 1, figsize=JOINT_FIGURE_SIZE)
+def _save_change_magnitude_figure(frames: dict[str, pd.DataFrame]) -> None:
+    # Compare model F1 across class-specific change-magnitude halves
+    tick_labels, scores = _change_magnitude_scores(frames)
+    figure, axis = plt.subplots(figsize=PANEL_FIGURE_SIZE)
     _plot_bar_panel(
-        axes[0],
+        axis,
         tick_labels,
         scores,
-        title=r"(a) Macro F1 by AOI median NO$_x$",
-        x_label=r"AOI median NO$_x$ group",
-        y_label="Macro F1",
+        title=r"F1 by NO$_x$ delta magnitude",
+        x_label="",
+        y_label="F1 Score",
+        y_limits=(0.28, 0.90),
+        y_ticks=np.arange(0.3, 0.91, 0.1),
     )
-    axes[0].legend(loc="lower center", bbox_to_anchor=(0.5, 1.10), ncol=2, frameon=False)
-    _plot_class_composition_panel(
-        axes[1],
-        tick_labels,
-        counts,
-        title="(b) Sample size and class composition by\nAOI median NO$_x$ group",
-        x_label=r"AOI median NO$_x$ group",
-    )
-    figure.tight_layout(h_pad=3.2)
-    figure.savefig(OUTPUT_STEMS[2].with_suffix(".pdf"), bbox_inches="tight")
-    figure.savefig(OUTPUT_STEMS[2].with_suffix(".png"), dpi=450, bbox_inches="tight")
-    plt.close(figure)
+    _save_panel(figure, axis, OUTPUT_STEMS[2])
 
 
 def _save_census_region_figure(
@@ -448,7 +441,7 @@ def main() -> None:
     """Generate the stratified-performance figures."""
     _configure_plot_style()
     frames = _load_predictions()
-    aoi = _aoi_characteristics(frames[MODEL_NAMES[0]])
+    aoi_ids = pd.Index(frames[MODEL_NAMES[0]]["aoi_id"].drop_duplicates().sort_values())
     panels = (
         (
             *_monthly_scores(frames),
@@ -477,8 +470,8 @@ def main() -> None:
         )
         _save_panel(figure, axis, output_stem)
 
-    _save_aoi_nox_figure(frames, aoi["aoi_score"])
-    _save_census_region_figure(frames, aoi.index)
+    _save_change_magnitude_figure(frames)
+    _save_census_region_figure(frames, aoi_ids)
 
 
 if __name__ == "__main__":
