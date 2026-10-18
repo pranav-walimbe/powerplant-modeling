@@ -9,7 +9,7 @@ import pandas as pd
 import polars as pl
 from sklearn.metrics import f1_score
 
-from config import FULL_DATA_PARQUET
+from config import FULL_DATA_PARQUET, MODEL_CLASS_NAMES
 
 plt.switch_backend("Agg")
 
@@ -29,6 +29,7 @@ MODEL_FILES = ("seasonal_test_predictions.csv", "test_predictions.csv")
 MODEL_COLORS = ("#0072B2", "#E69F00")
 MODEL_MARKERS = ("o", "s")
 MODEL_LINESTYLES = ("--", "-")
+CLASS_COLORS = ("#E68A8A", "#A6A6A6", "#7BAED4")
 
 TRUE_CLASS_COLUMN = "class_true"
 PREDICTED_CLASS_COLUMN = "class_predicted"
@@ -52,6 +53,7 @@ Y_LIMITS = (0.28, 0.72)
 Y_TICKS = np.arange(0.3, 0.71, 0.1)
 DEGREES_PER_SOLAR_HOUR = 15.0
 PANEL_FIGURE_SIZE = (3.35, 2.55)
+JOINT_FIGURE_SIZE = (3.35, 5.4)
 
 CENSUS_REGION_STATES = (
     ("Northeast", frozenset(("CT", "ME", "MA", "NH", "RI", "VT", "NJ", "NY", "PA"))),
@@ -103,20 +105,11 @@ def _aoi_characteristics(reference: pd.DataFrame) -> pd.DataFrame:
     return reference.groupby("aoi_id", sort=True)[["aoi_score"]].first()
 
 
-def _format_boundary(value: float) -> str:
-    # Keep stratum ranges compact at paper scale
-    if value >= 1_000:
-        return f"{value:,.0f}"
-    if np.isclose(value, round(value)):
-        return f"{value:.0f}"
-    return f"{value:.1f}"
-
-
 def _aoi_half_scores(
     frames: dict[str, pd.DataFrame],
     values: pd.Series,
-) -> tuple[list[str], dict[str, np.ndarray]]:
-    # Split AOIs at the median and score their associated records
+) -> tuple[list[str], dict[str, np.ndarray], np.ndarray]:
+    # Calculate scores and true-class counts for median-split AOI groups
     percentiles = values.rank(method="average", pct=True)
     strata = pd.cut(
         percentiles,
@@ -127,17 +120,23 @@ def _aoi_half_scores(
     reference = frames[MODEL_NAMES[0]]
     tick_labels: list[str] = []
     scores = {model_name: [] for model_name in MODEL_NAMES}
+    class_counts: list[np.ndarray] = []
     for stratum_name in AOI_HALF_NAMES:
         aoi_ids = values.index[strata == stratum_name]
         mask = reference["aoi_id"].isin(aoi_ids)
-        lower = _format_boundary(float(values.loc[aoi_ids].min()))
-        upper = _format_boundary(float(values.loc[aoi_ids].max()))
-        tick_labels.append(f"{stratum_name}\n{lower}-{upper}")
+        tick_labels.append(stratum_name)
+        class_counts.append(
+            np.bincount(
+                reference.loc[mask, TRUE_CLASS_COLUMN].to_numpy(dtype=np.int64),
+                minlength=len(MODEL_CLASS_NAMES),
+            )
+        )
         for model_name in MODEL_NAMES:
             scores[model_name].append(_macro_f1(frames[model_name].loc[mask]))
-    return tick_labels, {
+    score_arrays = {
         model_name: np.asarray(model_scores, dtype=np.float64) for model_name, model_scores in scores.items()
     }
+    return tick_labels, score_arrays, np.stack(class_counts)
 
 
 def _monthly_scores(
@@ -206,25 +205,33 @@ def _census_regions(aoi_ids: pd.Index) -> pd.Series:
     return regions
 
 
-def _census_region_scores(
+def _census_region_values(
     frames: dict[str, pd.DataFrame],
     aoi_ids: pd.Index,
-) -> tuple[list[str], dict[str, np.ndarray]]:
-    # Score every Census region represented by held-out AOIs
+) -> tuple[list[str], dict[str, np.ndarray], np.ndarray]:
+    # Calculate scores and true-class counts for represented Census regions
     regions = _census_regions(aoi_ids)
     represented = [region for region, _ in CENSUS_REGION_STATES if (regions == region).any()]
     reference = frames[MODEL_NAMES[0]]
     scores = {model_name: [] for model_name in MODEL_NAMES}
     tick_labels: list[str] = []
+    class_counts: list[np.ndarray] = []
     for region in represented:
         region_aoi_ids = regions.index[regions == region]
         mask = reference["aoi_id"].isin(region_aoi_ids)
         tick_labels.append(f"{region}\n(n={len(region_aoi_ids)} AOIs)")
+        class_counts.append(
+            np.bincount(
+                reference.loc[mask, TRUE_CLASS_COLUMN].to_numpy(dtype=np.int64),
+                minlength=len(MODEL_CLASS_NAMES),
+            )
+        )
         for model_name in MODEL_NAMES:
             scores[model_name].append(_macro_f1(frames[model_name].loc[mask]))
-    return tick_labels, {
+    score_arrays = {
         model_name: np.asarray(model_scores, dtype=np.float64) for model_name, model_scores in scores.items()
     }
+    return tick_labels, score_arrays, np.stack(class_counts)
 
 
 def _plot_panel(
@@ -280,7 +287,7 @@ def _plot_bar_panel(
     x_label: str,
     y_label: str,
 ) -> None:
-    # Plot paired bars for unordered Census-region categories
+    # Plot paired bars for unordered strata
     positions = np.arange(len(tick_labels), dtype=np.float64)
     bar_width = 0.34
     offsets = (-bar_width / 2, bar_width / 2)
@@ -314,6 +321,44 @@ def _plot_bar_panel(
     axis.spines[["top", "right"]].set_visible(False)
 
 
+def _plot_class_composition_panel(
+    axis: plt.Axes,
+    tick_labels: list[str],
+    counts: np.ndarray,
+    *,
+    title: str,
+    x_label: str,
+) -> None:
+    # Stack true-class counts within each stratum
+    positions = np.arange(len(tick_labels), dtype=np.float64)
+    bottom = np.zeros(len(tick_labels), dtype=np.float64)
+    for class_index, (class_name, color) in enumerate(zip(MODEL_CLASS_NAMES, CLASS_COLORS, strict=True)):
+        values = counts[:, class_index]
+        axis.bar(
+            positions,
+            values,
+            bottom=bottom,
+            width=0.72,
+            color=color,
+            edgecolor="white",
+            linewidth=0.45,
+            label=class_name.title(),
+        )
+        bottom += values
+    axis.set(
+        title=title,
+        xlabel=x_label,
+        ylabel="Samples",
+        xticks=positions,
+        xticklabels=tick_labels,
+        ylim=(0, counts.sum(axis=1).max() * 1.04),
+    )
+    axis.legend(loc="lower center", bbox_to_anchor=(0.5, 1.20), ncol=3, frameon=False)
+    axis.grid(axis="y", color="#D9D9D9", linewidth=0.55)
+    axis.set_axisbelow(True)
+    axis.spines[["top", "right"]].set_visible(False)
+
+
 def _save_panel(figure: plt.Figure, axis: plt.Axes, output_stem: Path) -> None:
     # Add the standalone legend and save both publication formats
     handles, labels = axis.get_legend_handles_labels()
@@ -324,8 +369,66 @@ def _save_panel(figure: plt.Figure, axis: plt.Axes, output_stem: Path) -> None:
     plt.close(figure)
 
 
-def main() -> None:
-    """Generate four standalone stratified-performance figures."""
+def _save_aoi_nox_figure(
+    frames: dict[str, pd.DataFrame],
+    aoi_scores: pd.Series,
+) -> None:
+    # Save the joint AOI NOx performance and composition figure
+    tick_labels, scores, counts = _aoi_half_scores(frames, aoi_scores)
+    figure, axes = plt.subplots(2, 1, figsize=JOINT_FIGURE_SIZE)
+    _plot_bar_panel(
+        axes[0],
+        tick_labels,
+        scores,
+        title=r"(a) Macro F1 by AOI median NO$_x$",
+        x_label=r"AOI median NO$_x$ group",
+        y_label="Macro F1",
+    )
+    axes[0].legend(loc="lower center", bbox_to_anchor=(0.5, 1.10), ncol=2, frameon=False)
+    _plot_class_composition_panel(
+        axes[1],
+        tick_labels,
+        counts,
+        title="(b) Sample size and class composition by\nAOI median NO$_x$ group",
+        x_label=r"AOI median NO$_x$ group",
+    )
+    figure.tight_layout(h_pad=3.2)
+    figure.savefig(OUTPUT_STEMS[2].with_suffix(".pdf"), bbox_inches="tight")
+    figure.savefig(OUTPUT_STEMS[2].with_suffix(".png"), dpi=450, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_census_region_figure(
+    frames: dict[str, pd.DataFrame],
+    aoi_ids: pd.Index,
+) -> None:
+    # Save the joint Census-region performance and composition figure
+    tick_labels, scores, counts = _census_region_values(frames, aoi_ids)
+    figure, axes = plt.subplots(2, 1, figsize=JOINT_FIGURE_SIZE)
+    _plot_bar_panel(
+        axes[0],
+        tick_labels,
+        scores,
+        title="(a) Macro F1 by AOI-center Census region",
+        x_label="Census region",
+        y_label="Macro F1",
+    )
+    axes[0].legend(loc="lower center", bbox_to_anchor=(0.5, 1.10), ncol=2, frameon=False)
+    _plot_class_composition_panel(
+        axes[1],
+        tick_labels,
+        counts,
+        title="(b) Sample size and class composition by\nAOI-center Census region",
+        x_label="Census region",
+    )
+    figure.tight_layout(h_pad=3.2)
+    figure.savefig(OUTPUT_STEMS[3].with_suffix(".pdf"), bbox_inches="tight")
+    figure.savefig(OUTPUT_STEMS[3].with_suffix(".png"), dpi=450, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _configure_plot_style() -> None:
+    # Configure publication-scale typography and vector fonts
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -339,6 +442,11 @@ def main() -> None:
             "ps.fonttype": 42,
         }
     )
+
+
+def main() -> None:
+    """Generate the stratified-performance figures."""
+    _configure_plot_style()
     frames = _load_predictions()
     aoi = _aoi_characteristics(frames[MODEL_NAMES[0]])
     panels = (
@@ -369,29 +477,8 @@ def main() -> None:
         )
         _save_panel(figure, axis, output_stem)
 
-    aoi_labels, aoi_scores = _aoi_half_scores(frames, aoi["aoi_score"])
-    figure, axis = plt.subplots(figsize=PANEL_FIGURE_SIZE)
-    _plot_bar_panel(
-        axis,
-        aoi_labels,
-        aoi_scores,
-        title=r"(c) Macro F1 by AOI median NO$_x$",
-        x_label=r"AOI median NO$_x$ group (lb hr$^{-1}$ range)",
-        y_label="Macro F1",
-    )
-    _save_panel(figure, axis, OUTPUT_STEMS[2])
-
-    region_labels, region_scores = _census_region_scores(frames, aoi.index)
-    figure, axis = plt.subplots(figsize=PANEL_FIGURE_SIZE)
-    _plot_bar_panel(
-        axis,
-        region_labels,
-        region_scores,
-        title="(d) Macro F1 by AOI-center Census region",
-        x_label="Census region",
-        y_label="Macro F1",
-    )
-    _save_panel(figure, axis, OUTPUT_STEMS[3])
+    _save_aoi_nox_figure(frames, aoi["aoi_score"])
+    _save_census_region_figure(frames, aoi.index)
 
 
 if __name__ == "__main__":
