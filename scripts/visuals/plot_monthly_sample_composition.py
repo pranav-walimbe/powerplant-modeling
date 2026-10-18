@@ -28,7 +28,6 @@ PREDICTED_CLASS_COLUMN = "class_predicted"
 PREDICTION_COLUMNS = (FINAL_TIMESTAMP_COLUMN, TRUE_CLASS_COLUMN, PREDICTED_CLASS_COLUMN)
 
 CLASS_COLORS = ("#E68A8A", "#A6A6A6", "#7BAED4")
-CLASS_LABEL_COLORS = ("black", "black", "black")
 FIGURE_SIZE = (3.35, 5.4)
 RIGHT_MARGIN_MONTHS = 0.25
 
@@ -118,16 +117,13 @@ def _plot_sample_composition(
     month_labels: list[str],
     counts: np.ndarray,
 ) -> None:
-    # Stack true-class counts and label within-month percentages
+    # Stack true-class counts within each month
     totals = counts.sum(axis=1)
-    percentages = 100 * counts / totals[:, np.newaxis]
     positions = np.arange(len(month_labels))
     bottom = np.zeros(len(month_labels), dtype=np.float64)
-    for class_index, (class_name, color, label_color) in enumerate(
-        zip(MODEL_CLASS_NAMES, CLASS_COLORS, CLASS_LABEL_COLORS, strict=True)
-    ):
+    for class_index, (class_name, color) in enumerate(zip(MODEL_CLASS_NAMES, CLASS_COLORS, strict=True)):
         values = counts[:, class_index]
-        bars = axis.bar(
+        axis.bar(
             positions,
             values,
             bottom=bottom,
@@ -137,17 +133,6 @@ def _plot_sample_composition(
             linewidth=0.45,
             label=class_name.title(),
         )
-        for month_index, bar in enumerate(bars):
-            axis.text(
-                bar.get_x() + bar.get_width() / 2,
-                bottom[month_index] + values[month_index] / 2,
-                f"{percentages[month_index, class_index]:.0f}%",
-                ha="center",
-                va="center",
-                color=label_color,
-                fontsize=4.4,
-                fontweight="bold",
-            )
         bottom += values
 
     axis.set(
