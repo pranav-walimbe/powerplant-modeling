@@ -13,79 +13,141 @@
 \citation{tempo2026userGuide,huang2026detectability,gauld2026dataCenter}
 \citation{tempo2026userGuide,epa2026powerMonitoring}
 \citation{santaren2025benchmarking,sun2025hourly}
-\citation{santaren2025benchmarking}
+\citation{kuhlmann2026temporal}
 \citation{sun2025hourly}
 \citation{beaudry2026quantification}
-\citation{huang2026detectability}
-\citation{alnaim2022evaluating}
-\citation{bruno2024uplume,dumont2024deepLearning}
 \@writefile{toc}{\contentsline {section}{Abstract}{1}{section*.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\citation{huang2026detectability}
+\citation{alnaim2022evaluating}
+\citation{finch2022automated}
+\citation{shi2015convlstm,ballas2015convgru}
+\citation{bertasius2021timesformer}
 \citation{tempo2026userGuide}
+\citation{epa2026powerSectorData}
+\citation{noaa2026hrrrDocumentation}
+\citation{noaa2026hrrrArchive}
 \@writefile{toc}{\contentsline {section}{\numberline {2}Data Sources}{2}{section.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.1}TEMPO NO$_2$ Data}{2}{subsection.2.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.2}CEMS Records}{2}{subsection.2.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.3}HRRR Weather Data}{2}{subsection.2.3}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces TEMPO Level 2 regridding to the AOI grid.}}{2}{figure.caption.3}\protected@file@percent }
-\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:tempoRegridding}{{1}{2}{TEMPO Level 2 regridding to the AOI grid}{figure.caption.3}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {3}Methods}{2}{section.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.1}AOI Construction}{2}{subsection.3.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.2}TEMPO Regridding and Quality Filtering}{2}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Sample Construction}{2}{subsection.3.3}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Example five-timestep sample.}}{3}{figure.caption.4}\protected@file@percent }
-\newlabel{fig:sample-construction}{{2}{3}{Example five-timestep sample}{figure.caption.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Transport Model}{3}{subsection.3.4}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Transport residuals for a five-timestep sample.}}{3}{figure.caption.5}\protected@file@percent }
-\newlabel{fig:transport-residuals}{{3}{3}{Transport residuals for a five-timestep sample}{figure.caption.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Dataset Stratification}{3}{subsection.3.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}ConvGRU Model}{3}{subsection.3.6}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces ConvGRU architecture.}}{4}{figure.caption.6}\protected@file@percent }
-\newlabel{fig:convgru-architecture}{{4}{4}{ConvGRU architecture}{figure.caption.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Temporal MLP}{4}{subsection.3.7}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Temporal MLP architecture.}}{4}{figure.caption.7}\protected@file@percent }
-\newlabel{fig:temporal-mlp}{{5}{4}{Temporal MLP architecture}{figure.caption.7}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Dataset composition by split and class.}}{4}{table.caption.8}\protected@file@percent }
-\newlabel{tab:dataset-composition}{{1}{4}{Dataset composition by split and class}{table.caption.8}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Training configuration.}}{4}{table.caption.9}\protected@file@percent }
-\newlabel{tab:training-configuration}{{2}{4}{Training configuration}{table.caption.9}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Training Procedure}{4}{subsection.3.8}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Classification performance by split.}}{5}{figure.caption.10}\protected@file@percent }
-\newlabel{fig:classification-performance}{{6}{5}{Classification performance by split}{figure.caption.10}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Results}{5}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Classification Performance}{5}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Spatial Attribution Performance}{5}{subsection.4.2}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Spatial attribution loss by class and split.}}{5}{figure.caption.11}\protected@file@percent }
-\newlabel{fig:spatial-attribution-loss}{{7}{5}{Spatial attribution loss by class and split}{figure.caption.11}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces TEMPO NO$_2$ regridding within a 72\nonbreakingspace km $\times $ 72\nonbreakingspace km area centered on a power plant. (a) Native Level 2 footprints overlaid with the target grid. (b) Footprint values averaged by area of overlap onto a $24 \times 24$ grid of 3\nonbreakingspace km $\times $ 3\nonbreakingspace km cells.}}{3}{figure.caption.3}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:tempoRegridding}{{1}{3}{TEMPO NO$_2$ regridding within a 72~km $\times $ 72~km area centered on a power plant. (a) Native Level 2 footprints overlaid with the target grid. (b) Footprint values averaged by area of overlap onto a $24 \times 24$ grid of 3~km $\times $ 3~km cells}{figure.caption.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Sample Construction}{3}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:sample-construction}{{3.3}{3}{Sample Construction}{subsection.3.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Eligible increase and decrease sample counts across NO$_x${} emissions change thresholds, before raster quality filtering and class balancing.}}{3}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:label-threshold-samples}{{2}{3}{Eligible increase and decrease sample counts across \NOx {} emissions change thresholds, before raster quality filtering and class balancing}{figure.caption.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Two five-observation TEMPO NO$_2$ sequences with CEMS-derived increase labels. (a) An AOI centered on the Victor H. Braunig Power Station in San Antonio, Texas, observed on August 25, 2023, shows a clear visual pattern of increasing emissions. (b) An AOI centered on the High Bridge Generating Station in St. Paul, Minnesota, observed on September 16, 2025, shows little visual evidence of increasing emissions. Both sequences exceed the 250\nonbreakingspace $\mathrm  {lb\,h^{-1}}$ NO$_x${} emissions change threshold.}}{3}{figure.caption.5}\protected@file@percent }
+\newlabel{fig:no2-class-agreement-examples}{{3}{3}{Two five-observation TEMPO NO$_2$ sequences with CEMS-derived increase labels. (a) An AOI centered on the Victor H. Braunig Power Station in San Antonio, Texas, observed on August 25, 2023, shows a clear visual pattern of increasing emissions. (b) An AOI centered on the High Bridge Generating Station in St. Paul, Minnesota, observed on September 16, 2025, shows little visual evidence of increasing emissions. Both sequences exceed the 250~$\mathrm {lb\,h^{-1}}$ \NOx {} emissions change threshold}{figure.caption.5}{}}
+\citation{santaren2025benchmarking,meier2024conversion}
+\citation{santaren2025benchmarking,meier2024conversion}
+\citation{meier2024conversion}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Five-observation training sample (validity masks excluded) from an AOI centered on the Hugh L. Spurlock Generating Station in Maysville, Kentucky, observed on February 26, 2025. Panels (a)--(c) show the NO$_2$, wind, and temperature inputs at $t_0$--$t_4$; (d) shows the four residuals between adjacent observations; and (e) shows the temporal features.}}{4}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:sample-construction}{{4}{4}{Five-observation training sample (validity masks excluded) from an AOI centered on the Hugh L. Spurlock Generating Station in Maysville, Kentucky, observed on February 26, 2025. Panels (a)--(c) show the NO$_2$, wind, and temperature inputs at $t_0$--$t_4$; (d) shows the four residuals between adjacent observations; and (e) shows the temporal features}{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Transport Model}{4}{subsection.3.4}\protected@file@percent }
+\newlabel{eq:transport-wind}{{{i}}{4}{Transport Model}{AMS.13}{}}
+\newlabel{eq:transport-advection}{{{ii}}{4}{Transport Model}{AMS.14}{}}
+\newlabel{eq:transport-diffusion-scale}{{{iii}}{4}{Transport Model}{AMS.15}{}}
+\newlabel{eq:transport-diffusion}{{{iv}}{4}{Transport Model}{AMS.16}{}}
+\newlabel{eq:transport-decay}{{{v}}{4}{Transport Model}{AMS.17}{}}
+\newlabel{eq:transport-residual}{{{vi}}{4}{Transport Model}{AMS.18}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Dataset Stratification}{4}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}ConvGRU Model}{5}{subsection.3.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Final modeling dataset composition by split and behavior class. AOIs are distinct 72\nonbreakingspace km $\times $ 72\nonbreakingspace km bounding boxes centered on power plants. An active plant has nonzero operating time during at least one observed hour in the dataset.}}{5}{table.caption.20}\protected@file@percent }
+\newlabel{tab:dataset-composition}{{1}{5}{Final modeling dataset composition by split and behavior class. AOIs are distinct 72~km $\times $ 72~km bounding boxes centered on power plants. An active plant has nonzero operating time during at least one observed hour in the dataset}{table.caption.20}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Baseline MLP Model}{5}{subsection.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Transport Model Parameter Tuning}{5}{subsection.3.8}\protected@file@percent }
+\newlabel{sec:transport-parameter-tuning}{{3.8}{5}{Transport Model Parameter Tuning}{subsection.3.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.9}Training Procedure}{5}{subsection.3.9}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces ConvGRU architecture for emissions change classification. (a) Observation and transport-residual encoders, four recurrent transitions, and late fusion with time-derived tabular features. (b) Reset, update, and hidden-state operations within one ConvGRU cell.}}{6}{figure.caption.19}\protected@file@percent }
+\newlabel{fig:convgru-architecture}{{5}{6}{ConvGRU architecture for emissions change classification. (a) Observation and transport-residual encoders, four recurrent transitions, and late fusion with time-derived tabular features. (b) Reset, update, and hidden-state operations within one ConvGRU cell}{figure.caption.19}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Training parameters and setup details for the baseline MLP and ConvGRU. Entries spanning both model columns apply to both models; dashes indicate parameters not used by the MLP.}}{6}{table.caption.21}\protected@file@percent }
+\newlabel{tab:training-configuration}{{2}{6}{Training parameters and setup details for the baseline MLP and ConvGRU. Entries spanning both model columns apply to both models; dashes indicate parameters not used by the MLP}{table.caption.21}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Results}{6}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Classification Performance}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Performance Across Evaluation Strata}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Performance Across Months}{6}{figure.caption.23}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Test set performance of the baseline MLP and ConvGRU for emissions change classification. (a) F1 and (b) recall for the decrease, steady, and increase classes; (c) macro-F1 across classes.}}{7}{figure.caption.22}\protected@file@percent }
+\newlabel{fig:classification-performance}{{6}{7}{Test set performance of the baseline MLP and ConvGRU for emissions change classification. (a) F1 and (b) recall for the decrease, steady, and increase classes; (c) macro-F1 across classes}{figure.caption.22}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Test set performance and class composition by month. (a) Classification accuracy of the baseline MLP and ConvGRU. (b) Number of samples in each emissions change class (decrease, steady, and increase) by month.}}{7}{figure.caption.23}\protected@file@percent }
+\newlabel{fig:stratified-performance-monthly}{{7}{7}{Test set performance and class composition by month. (a) Classification accuracy of the baseline MLP and ConvGRU. (b) Number of samples in each emissions change class (decrease, steady, and increase) by month}{figure.caption.23}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Performance by Local Solar Hour}{7}{figure.caption.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.3}Performance by Census Region}{7}{figure.caption.25}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.4}Performance by NO$_x${} Change Magnitude}{7}{figure.caption.26}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Test set performance and class composition by local solar hour at the sequence midpoint. (a) Classification accuracy of the baseline MLP and ConvGRU. (b) Number of samples in each emissions change class (decrease, steady, and increase) by hour.}}{8}{figure.caption.24}\protected@file@percent }
+\newlabel{fig:stratified-performance-solar-hour}{{8}{8}{Test set performance and class composition by local solar hour at the sequence midpoint. (a) Classification accuracy of the baseline MLP and ConvGRU. (b) Number of samples in each emissions change class (decrease, steady, and increase) by hour}{figure.caption.24}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Ablation Study}{8}{subsection.4.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Test set performance and class composition by Census region of the AOI center. (a) macro-F1 of the baseline MLP and ConvGRU. (b) Number of samples in each emissions change class (decrease, steady, and increase) by region.}}{8}{figure.caption.25}\protected@file@percent }
+\newlabel{fig:stratified-performance-census-region}{{9}{8}{Test set performance and class composition by Census region of the AOI center. (a) macro-F1 of the baseline MLP and ConvGRU. (b) Number of samples in each emissions change class (decrease, steady, and increase) by region}{figure.caption.25}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Test set performance by NO$_x${} emissions change magnitude within increase and decrease classes. Within each class, samples are split into lower and upper halves at the median absolute emissions change.}}{8}{figure.caption.26}\protected@file@percent }
+\newlabel{fig:stratified-performance-change-magnitude}{{10}{8}{Test set performance by \NOx {} emissions change magnitude within increase and decrease classes. Within each class, samples are split into lower and upper halves at the median absolute emissions change}{figure.caption.26}{}}
+\citation{huang2026detectability,kuhlmann2026temporal,santaren2025benchmarking}
+\citation{caiso2026outages,ercot2026unplannedOutages,pjm2026dataAvailability}
+\citation{epa2026powerSectorGuide,epa2026powerSectorData}
+\citation{eia2026hourlyGrid,pjm2026dataAvailability,ercot2026dispatchDisclosure}
+\citation{eia2026dataCenterDemand,gauld2026dataCenter,epa2026islandedGeneration}
+\citation{gauld2026dataCenter,epa2026islandedGeneration,eia2026serverLoad}
+\citation{santaren2025benchmarking,kuhlmann2026temporal}
+\citation{yang2024gems,keco2026cleansys,esa2025sentinel4,entsoe2014transparency}
+\citation{seo2024gemsRetrieval}
+\citation{huang2026detectability,meier2024conversion}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces ConvGRU ablation performance on the test set. Each ablated model was retrained with the listed input zeroed out for all samples. Baseline is the full-input ConvGRU.}}{9}{table.caption.27}\protected@file@percent }
+\newlabel{tab:ablation-study}{{3}{9}{ConvGRU ablation performance on the test set. Each ablated model was retrained with the listed input zeroed out for all samples. Baseline is the full-input ConvGRU}{table.caption.27}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{9}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Evaluation of Model Results}{9}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Implications for Power Plant Monitoring}{9}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Limitations and Future Work}{9}{subsection.5.3}\protected@file@percent }
 \bibstyle{ACM-Reference-Format}
 \bibdata{references}
 \bibcite{alnaim2022evaluating}{{1}{2022}{{Alnaim et~al\mbox  {.}}}{{}}}
-\bibcite{beaudry2026quantification}{{2}{2026}{{Beaudry et~al\mbox  {.}}}{{}}}
-\bibcite{bruno2024uplume}{{3}{2024}{{Bruno et~al\mbox  {.}}}{{}}}
-\bibcite{dumont2024deepLearning}{{4}{2024}{{Dumont Le~Brazidec et~al\mbox  {.}}}{{}}}
-\bibcite{gauld2026dataCenter}{{5}{2026}{{Gauld et~al\mbox  {.}}}{{}}}
-\bibcite{huang2026detectability}{{6}{2026}{{Huang and Wang}}{{}}}
-\bibcite{levelt2006omi}{{7}{2006}{{Levelt et~al\mbox  {.}}}{{}}}
-\bibcite{santaren2025benchmarking}{{8}{2025}{{Santaren et~al\mbox  {.}}}{{}}}
-\bibcite{sun2025hourly}{{9}{2025}{{Sun et~al\mbox  {.}}}{{}}}
-\bibcite{tempo2026userGuide}{{10}{2026}{{TEMPO Science Team}}{{}}}
-\bibcite{epa2016noxHealth}{{11}{2016}{{U.S. Environmental Protection Agency}}{{}}}
-\bibcite{epa2021substitute}{{12}{2021}{{U.S. Environmental Protection Agency}}{{}}}
-\bibcite{epa2026emissionsTrends}{{13}{2026a}{{U.S. Environmental Protection Agency}}{{}}}
-\bibcite{epa2026powerMonitoring}{{14}{2026b}{{U.S. Environmental Protection Agency}}{{}}}
-\bibcite{veefkind2012tropomi}{{15}{2012}{{Veefkind et~al\mbox  {.}}}{{}}}
-\bibcite{zoogman2017tempo}{{16}{2017}{{Zoogman et~al\mbox  {.}}}{{}}}
+\bibcite{ballas2015convgru}{{2}{2015}{{Ballas et~al\mbox  {.}}}{{}}}
+\bibcite{beaudry2026quantification}{{3}{2026}{{Beaudry et~al\mbox  {.}}}{{}}}
+\bibcite{bertasius2021timesformer}{{4}{2021}{{Bertasius et~al\mbox  {.}}}{{}}}
+\bibcite{caiso2026outages}{{5}{2026}{{California Independent System Operator}}{{}}}
+\bibcite{ercot2026dispatchDisclosure}{{6}{2026a}{{Electric Reliability Council of Texas}}{{}}}
+\bibcite{ercot2026unplannedOutages}{{7}{2026b}{{Electric Reliability Council of Texas}}{{}}}
+\bibcite{entsoe2014transparency}{{8}{2014}{{European Network of Transmission System Operators for Electricity}}{{}}}
+\bibcite{esa2025sentinel4}{{9}{2025}{{European Space Agency}}{{}}}
+\bibcite{finch2022automated}{{10}{2022}{{Finch et~al\mbox  {.}}}{{}}}
+\bibcite{gauld2026dataCenter}{{11}{2026}{{Gauld et~al\mbox  {.}}}{{}}}
+\bibcite{huang2026detectability}{{12}{2026}{{Huang and Wang}}{{}}}
+\bibcite{keco2026cleansys}{{13}{2026}{{Korea Environment Corporation}}{{}}}
+\bibcite{kuhlmann2026temporal}{{14}{2026}{{Kuhlmann et~al\mbox  {.}}}{{}}}
+\bibcite{levelt2006omi}{{15}{2006}{{Levelt et~al\mbox  {.}}}{{}}}
+\bibcite{meier2024conversion}{{16}{2024}{{Meier et~al\mbox  {.}}}{{}}}
+\bibcite{noaa2026hrrrDocumentation}{{17}{2026a}{{National Oceanic and Atmospheric Administration}}{{}}}
+\bibcite{noaa2026hrrrArchive}{{18}{2026b}{{National Oceanic and Atmospheric Administration}}{{}}}
+\bibcite{pjm2026dataAvailability}{{19}{2026}{{PJM Interconnection}}{{}}}
+\bibcite{santaren2025benchmarking}{{20}{2025}{{Santaren et~al\mbox  {.}}}{{}}}
+\bibcite{seo2024gemsRetrieval}{{21}{2024}{{Seo et~al\mbox  {.}}}{{}}}
+\bibcite{shi2015convlstm}{{22}{2015}{{Shi et~al\mbox  {.}}}{{}}}
+\bibcite{sun2025hourly}{{23}{2025}{{Sun et~al\mbox  {.}}}{{}}}
+\bibcite{tempo2026userGuide}{{24}{2026}{{TEMPO Science Team}}{{}}}
+\bibcite{eia2026hourlyGrid}{{25}{2026a}{{U.S. Energy Information Administration}}{{}}}
+\bibcite{eia2026serverLoad}{{26}{2026b}{{U.S. Energy Information Administration}}{{}}}
+\bibcite{eia2026dataCenterDemand}{{27}{2026c}{{U.S. Energy Information Administration}}{{}}}
+\bibcite{epa2016noxHealth}{{28}{2016}{{U.S. Environmental Protection Agency}}{{}}}
+\bibcite{epa2021substitute}{{29}{2021}{{U.S. Environmental Protection Agency}}{{}}}
+\bibcite{epa2026emissionsTrends}{{30}{2026a}{{U.S. Environmental Protection Agency}}{{}}}
+\bibcite{epa2026powerSectorGuide}{{31}{2026b}{{U.S. Environmental Protection Agency}}{{}}}
+\bibcite{epa2026islandedGeneration}{{32}{2026c}{{U.S. Environmental Protection Agency}}{{}}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{10}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{References}{10}{section*.29}\protected@file@percent }
+\bibcite{epa2026powerMonitoring}{{33}{2026d}{{U.S. Environmental Protection Agency}}{{}}}
+\bibcite{epa2026powerSectorData}{{34}{2026e}{{U.S. Environmental Protection Agency}}{{}}}
+\bibcite{veefkind2012tropomi}{{35}{2012}{{Veefkind et~al\mbox  {.}}}{{}}}
+\bibcite{yang2024gems}{{36}{2024}{{Yang et~al\mbox  {.}}}{{}}}
+\bibcite{zoogman2017tempo}{{37}{2017}{{Zoogman et~al\mbox  {.}}}{{}}}
 \newlabel{tocindent-1}{0pt}
 \newlabel{tocindent0}{0pt}
 \newlabel{tocindent1}{4.185pt}
 \newlabel{tocindent2}{10.34999pt}
-\newlabel{tocindent3}{0pt}
+\newlabel{tocindent3}{16.51498pt}
 \newlabel{tocindent4}{0pt}
 \newlabel{tocindent5}{0pt}
-\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Representative spatial attribution predictions.}}{6}{figure.caption.12}\protected@file@percent }
-\newlabel{fig:spatial-attribution-examples}{{8}{6}{Representative spatial attribution predictions}{figure.caption.12}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Performance Across Evaluation Strata}{6}{subsection.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Ablation Study}{6}{subsection.4.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{References}{6}{section*.14}\protected@file@percent }
-\newlabel{TotPages}{{6}{6}{}{page.6}{}}
-\gdef \@abspage@last{6}
+\newlabel{TotPages}{{11}{11}{}{page.11}{}}
+\gdef \@abspage@last{11}
