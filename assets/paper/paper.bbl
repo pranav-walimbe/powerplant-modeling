@@ -2,7 +2,7 @@
 %%% Do NOT edit. File created by BibTeX with style
 %%% ACM-Reference-Format-Journals [18-Jan-2012].
 
-\begin{thebibliography}{19}
+\begin{thebibliography}{37}
 
 %%% ====================================================================
 %%% NOTE TO THE USER: you can override these defaults by providing
@@ -75,13 +75,74 @@
 \newblock
 
 
-\bibitem[Dumont Le~Brazidec et~al\mbox{.}(2024)]%
-        {dumont2024deepLearning}
-\bibfield{author}{\bibinfo{person}{J. Dumont Le~Brazidec}, \bibinfo{person}{P. Vanderbecken}, \bibinfo{person}{A. Farchi}, \bibinfo{person}{G. Broquet}, \bibinfo{person}{G. Kuhlmann}, {and} \bibinfo{person}{M. Bocquet}.} \bibinfo{year}{2024}\natexlab{}.
-\newblock \showarticletitle{Deep Learning Applied to {CO$_2$} Power Plant Emissions Quantification Using Simulated Satellite Images}.
-\newblock \bibinfo{journal}{\emph{Geoscientific Model Development}}  \bibinfo{volume}{17} (\bibinfo{year}{2024}), \bibinfo{pages}{1995--2014}.
+\bibitem[{California Independent System Operator}(2026)]%
+        {caiso2026outages}
+\bibfield{author}{\bibinfo{person}{{California Independent System Operator}}.} \bibinfo{year}{2026}\natexlab{}.
+\newblock \bibinfo{title}{Curtailed and Non-Operational Generators}.
 \newblock
-\href{https://doi.org/10.5194/gmd-17-1995-2024}{doi:\nolinkurl{10.5194/gmd-17-1995-2024}}
+\urldef\tempurl%
+\url{https://www.caiso.com/market-operations/outages/curtailed-and-non-operational-generators}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 19, 2026}.
+
+
+\bibitem[{Electric Reliability Council of Texas}(2026a)]%
+        {ercot2026dispatchDisclosure}
+\bibfield{author}{\bibinfo{person}{{Electric Reliability Council of Texas}}.} \bibinfo{year}{2026}\natexlab{a}.
+\newblock \bibinfo{title}{60-Day {SCED} Disclosure Reports}.
+\newblock
+\urldef\tempurl%
+\url{https://www.ercot.com/mp/data-products/data-product-details?id=NP3-965-ER}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 19, 2026}.
+
+
+\bibitem[{Electric Reliability Council of Texas}(2026b)]%
+        {ercot2026unplannedOutages}
+\bibfield{author}{\bibinfo{person}{{Electric Reliability Council of Texas}}.} \bibinfo{year}{2026}\natexlab{b}.
+\newblock \bibinfo{title}{Unplanned Resource Outages Report}.
+\newblock
+\urldef\tempurl%
+\url{https://www.ercot.com/mp/data-products/data-product-details?id=NP1-346-ER}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 19, 2026}.
+
+
+\bibitem[{European Network of Transmission System Operators for Electricity}(2014)]%
+        {entsoe2014transparency}
+\bibfield{author}{\bibinfo{person}{{European Network of Transmission System Operators for Electricity}}.} \bibinfo{year}{2014}\natexlab{}.
+\newblock \bibinfo{title}{Transparency Platform: Detailed Data Descriptions}.
+\newblock
+\urldef\tempurl%
+\url{https://www.entsoe.eu/fileadmin/user_upload/_library/resources/Transparency/MoP%20Ref02%20-%20EMFIP-Detailed%20Data%20Descriptions%20V1R4-2014-02-24.pdf}
+\showURL{%
+\tempurl}
+
+
+\bibitem[{European Space Agency}(2025)]%
+        {esa2025sentinel4}
+\bibfield{author}{\bibinfo{person}{{European Space Agency}}.} \bibinfo{year}{2025}\natexlab{}.
+\newblock \bibinfo{title}{{Sentinel-4} Offers First Glimpses of Air Pollutants}.
+\newblock
+\urldef\tempurl%
+\url{https://www.esa.int/Applications/Observing_the_Earth/Copernicus/Sentinel-4/Sentinel-4_offers_first_glimpses_of_air_pollutants}
+\showURL{%
+\tempurl}
+
+
+\bibitem[Finch et~al\mbox{.}(2022)]%
+        {finch2022automated}
+\bibfield{author}{\bibinfo{person}{D.~P. Finch}, \bibinfo{person}{P.~I. Palmer}, {and} \bibinfo{person}{T. Zhang}.} \bibinfo{year}{2022}\natexlab{}.
+\newblock \showarticletitle{Automated Detection of Atmospheric {NO$_2$} Plumes from Satellite Data: A Tool to Help Infer Anthropogenic Combustion Emissions}.
+\newblock \bibinfo{journal}{\emph{Atmospheric Measurement Techniques}}  \bibinfo{volume}{15} (\bibinfo{year}{2022}), \bibinfo{pages}{721--733}.
+\newblock
+\href{https://doi.org/10.5194/amt-15-721-2022}{doi:\nolinkurl{10.5194/amt-15-721-2022}}
 
 
 \bibitem[Gauld et~al\mbox{.}(2026)]%
@@ -102,6 +163,28 @@
 \href{https://doi.org/10.5194/amt-19-6099-2026}{doi:\nolinkurl{10.5194/amt-19-6099-2026}}
 
 
+\bibitem[{Korea Environment Corporation}(2026)]%
+        {keco2026cleansys}
+\bibfield{author}{\bibinfo{person}{{Korea Environment Corporation}}.} \bibinfo{year}{2026}\natexlab{}.
+\newblock \bibinfo{title}{{CleanSYS} Stack Monitoring Results: Public Real-Time Data}.
+\newblock
+\urldef\tempurl%
+\url{https://www.data.go.kr/data/15136837/fileData.do}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 19, 2026}.
+
+
+\bibitem[Kuhlmann et~al\mbox{.}(2026)]%
+        {kuhlmann2026temporal}
+\bibfield{author}{\bibinfo{person}{Gerrit Kuhlmann}, \bibinfo{person}{Erik Franciscus~Maria Koene}, \bibinfo{person}{Chloe~Natasha Schooling}, \bibinfo{person}{Paul~Ian Palmer}, \bibinfo{person}{{\`O}scar Collado~L{\'o}pez}, {and} \bibinfo{person}{Marc Guevara}.} \bibinfo{year}{2026}\natexlab{}.
+\newblock \showarticletitle{Temporal Variability of {NO$_x$} Emissions from Power Plants: A Comparison of Satellite- and Inventory-Based Estimates}.
+\newblock \bibinfo{journal}{\emph{Atmospheric Chemistry and Physics}}  \bibinfo{volume}{26} (\bibinfo{year}{2026}), \bibinfo{pages}{4405--4421}.
+\newblock
+\href{https://doi.org/10.5194/acp-26-4405-2026}{doi:\nolinkurl{10.5194/acp-26-4405-2026}}
+
+
 \bibitem[Levelt et~al\mbox{.}(2006)]%
         {levelt2006omi}
 \bibfield{author}{\bibinfo{person}{Pieternel~F. Levelt}, \bibinfo{person}{Gijsbertus H.~J. van~den Oord}, \bibinfo{person}{Marcel~R. Dobber}, \bibinfo{person}{Anssi M{\"a}lkki}, \bibinfo{person}{Huib Visser}, \bibinfo{person}{Johan de Vries}, \bibinfo{person}{Piet Stammes}, \bibinfo{person}{Jens O.~V. Lundell}, {and} \bibinfo{person}{Heikki Saari}.} \bibinfo{year}{2006}\natexlab{}.
@@ -120,6 +203,45 @@
 \href{https://doi.org/10.5194/acp-24-7667-2024}{doi:\nolinkurl{10.5194/acp-24-7667-2024}}
 
 
+\bibitem[{National Oceanic and Atmospheric Administration}(2026a)]%
+        {noaa2026hrrrDocumentation}
+\bibfield{author}{\bibinfo{person}{{National Oceanic and Atmospheric Administration}}.} \bibinfo{year}{2026}\natexlab{a}.
+\newblock \bibinfo{title}{High-Resolution Rapid Refresh ({HRRR})}.
+\newblock
+\urldef\tempurl%
+\url{https://rapidrefresh.noaa.gov/hrrr/}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 15, 2026}.
+
+
+\bibitem[{National Oceanic and Atmospheric Administration}(2026b)]%
+        {noaa2026hrrrArchive}
+\bibfield{author}{\bibinfo{person}{{National Oceanic and Atmospheric Administration}}.} \bibinfo{year}{2026}\natexlab{b}.
+\newblock \bibinfo{title}{{NOAA} High-Resolution Rapid Refresh ({HRRR}) Model}.
+\newblock
+\urldef\tempurl%
+\url{https://registry.opendata.aws/noaa-hrrr-pds/}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 15, 2026}.
+
+
+\bibitem[{PJM Interconnection}(2026)]%
+        {pjm2026dataAvailability}
+\bibfield{author}{\bibinfo{person}{{PJM Interconnection}}.} \bibinfo{year}{2026}\natexlab{}.
+\newblock \bibinfo{title}{Data Availability}.
+\newblock
+\urldef\tempurl%
+\url{https://www.pjm.com/markets-and-operations/etools/data-miner-2/data-availability.aspx}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 18, 2026}.
+
+
 \bibitem[Santaren et~al\mbox{.}(2025)]%
         {santaren2025benchmarking}
 \bibfield{author}{\bibinfo{person}{D. Santaren}, \bibinfo{person}{J. Hakkarainen}, \bibinfo{person}{G. Kuhlmann}, \bibinfo{person}{E. Koene}, \bibinfo{person}{F. Chevallier}, \bibinfo{person}{I. Ialongo}, \bibinfo{person}{H. Lindqvist}, \bibinfo{person}{J. Nurmela}, \bibinfo{person}{J. Tamminen}, \bibinfo{person}{L. Amor{\'o}s}, \bibinfo{person}{D. Brunner}, {and} \bibinfo{person}{G. Broquet}.} \bibinfo{year}{2025}\natexlab{}.
@@ -127,6 +249,15 @@
 \newblock \bibinfo{journal}{\emph{Atmospheric Measurement Techniques}}  \bibinfo{volume}{18} (\bibinfo{year}{2025}), \bibinfo{pages}{211--239}.
 \newblock
 \href{https://doi.org/10.5194/amt-18-211-2025}{doi:\nolinkurl{10.5194/amt-18-211-2025}}
+
+
+\bibitem[Seo et~al\mbox{.}(2024)]%
+        {seo2024gemsRetrieval}
+\bibfield{author}{\bibinfo{person}{S. Seo}, \bibinfo{person}{P. Valks}, \bibinfo{person}{R. Lutz}, \bibinfo{person}{K.-P. Heue}, \bibinfo{person}{P. Hedelt}, \bibinfo{person}{V. Molina~Garc{\'i}a}, \bibinfo{person}{D. Loyola}, \bibinfo{person}{H. Lee}, {and} \bibinfo{person}{J. Kim}.} \bibinfo{year}{2024}\natexlab{}.
+\newblock \showarticletitle{Tropospheric {NO$_2$} Retrieval Algorithm for Geostationary Satellite Instruments: Applications to {GEMS}}.
+\newblock \bibinfo{journal}{\emph{Atmospheric Measurement Techniques}}  \bibinfo{volume}{17} (\bibinfo{year}{2024}), \bibinfo{pages}{6163--6191}.
+\newblock
+\href{https://doi.org/10.5194/amt-17-6163-2024}{doi:\nolinkurl{10.5194/amt-17-6163-2024}}
 
 
 \bibitem[Shi et~al\mbox{.}(2015)]%
@@ -154,6 +285,41 @@
 \href{https://doi.org/10.5067/doc/tempo/L2andL3UserGuide/V2.1}{doi:\nolinkurl{10.5067/doc/tempo/L2andL3UserGuide/V2.1}}
 \newblock
 \shownote{Version 2.1}.
+
+
+\bibitem[{U.S. Energy Information Administration}(2026a)]%
+        {eia2026hourlyGrid}
+\bibfield{author}{\bibinfo{person}{{U.S. Energy Information Administration}}.} \bibinfo{year}{2026}\natexlab{a}.
+\newblock \bibinfo{title}{About the {EIA-930} Data}.
+\newblock
+\urldef\tempurl%
+\url{https://www.eia.gov/electricity/930-content/about.html}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 19, 2026}.
+
+
+\bibitem[{U.S. Energy Information Administration}(2026b)]%
+        {eia2026serverLoad}
+\bibfield{author}{\bibinfo{person}{{U.S. Energy Information Administration}}.} \bibinfo{year}{2026}\natexlab{b}.
+\newblock \bibinfo{title}{Data Center Server Energy Use Grows Across the Commercial Building Stock}.
+\newblock
+\urldef\tempurl%
+\url{https://www.eia.gov/todayinenergy/detail.php?id=67704}
+\showURL{%
+\tempurl}
+
+
+\bibitem[{U.S. Energy Information Administration}(2026c)]%
+        {eia2026dataCenterDemand}
+\bibfield{author}{\bibinfo{person}{{U.S. Energy Information Administration}}.} \bibinfo{year}{2026}\natexlab{c}.
+\newblock \bibinfo{title}{Fossil Generation Could Rise with Faster-than-Expected Growth in Data Center Power Demand}.
+\newblock
+\urldef\tempurl%
+\url{https://www.eia.gov/todayinenergy/detail.php?id=67344}
+\showURL{%
+\tempurl}
 
 
 \bibitem[{U.S. Environmental Protection Agency}(2016)]%
@@ -194,8 +360,32 @@
 
 
 \bibitem[{U.S. Environmental Protection Agency}(2026b)]%
-        {epa2026powerMonitoring}
+        {epa2026powerSectorGuide}
 \bibfield{author}{\bibinfo{person}{{U.S. Environmental Protection Agency}}.} \bibinfo{year}{2026}\natexlab{b}.
+\newblock \bibinfo{title}{{CAMD}'s Power Sector Emissions Data Guide}.
+\newblock
+\urldef\tempurl%
+\url{https://nepis.epa.gov/Exe/ZyPURL.cgi?Dockey=P1019ZHX.txt}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 19, 2026}.
+
+
+\bibitem[{U.S. Environmental Protection Agency}(2026c)]%
+        {epa2026islandedGeneration}
+\bibfield{author}{\bibinfo{person}{{U.S. Environmental Protection Agency}}.} \bibinfo{year}{2026}\natexlab{c}.
+\newblock \bibinfo{title}{Clarification of Acid Rain Program Regulatory Provisions Concerning Islanded Power Generation Facilities}.
+\newblock
+\urldef\tempurl%
+\url{https://www.epa.gov/system/files/documents/2026-07/epa-issues-clarification-on-islanded-power-generators-and-acid-rain-program-provisions.pdf}
+\showURL{%
+\tempurl}
+
+
+\bibitem[{U.S. Environmental Protection Agency}(2026d)]%
+        {epa2026powerMonitoring}
+\bibfield{author}{\bibinfo{person}{{U.S. Environmental Protection Agency}}.} \bibinfo{year}{2026}\natexlab{d}.
 \newblock \bibinfo{title}{Emissions Monitoring and Reporting}.
 \newblock
 \urldef\tempurl%
@@ -206,6 +396,20 @@
 \shownote{Accessed October 4, 2026}.
 
 
+\bibitem[{U.S. Environmental Protection Agency}(2026e)]%
+        {epa2026powerSectorData}
+\bibfield{author}{\bibinfo{person}{{U.S. Environmental Protection Agency}}.} \bibinfo{year}{2026}\natexlab{e}.
+\newblock \bibinfo{title}{Power Sector Data}.
+\newblock \bibinfo{howpublished}{Office of Atmospheric Protection, Clean Air and Power Division, Washington, DC}.
+\newblock
+\urldef\tempurl%
+\url{https://campd.epa.gov/}
+\showURL{%
+\tempurl}
+\newblock
+\shownote{Accessed October 15, 2026}.
+
+
 \bibitem[Veefkind et~al\mbox{.}(2012)]%
         {veefkind2012tropomi}
 \bibfield{author}{\bibinfo{person}{J.~P. Veefkind}, \bibinfo{person}{I. Aben}, \bibinfo{person}{K. McMullan}, \bibinfo{person}{H. F{\"o}rster}, \bibinfo{person}{J. de Vries}, \bibinfo{person}{G. Otter}, \bibinfo{person}{J. Claas}, \bibinfo{person}{H.~J. Eskes}, \bibinfo{person}{J.~F. de Haan}, \bibinfo{person}{Q. Kleipool}, \bibinfo{person}{M. van Weele}, \bibinfo{person}{O. Hasekamp}, \bibinfo{person}{R. Hoogeveen}, \bibinfo{person}{J. Landgraf}, \bibinfo{person}{R. Snel}, \bibinfo{person}{P. Tol}, \bibinfo{person}{P. Ingmann}, \bibinfo{person}{R. Voors}, \bibinfo{person}{B. Kruizinga}, \bibinfo{person}{R. Vink}, \bibinfo{person}{H. Visser}, {and} \bibinfo{person}{P.~F. Levelt}.} \bibinfo{year}{2012}\natexlab{}.
@@ -213,6 +417,15 @@
 \newblock \bibinfo{journal}{\emph{Remote Sensing of Environment}}  \bibinfo{volume}{120} (\bibinfo{year}{2012}), \bibinfo{pages}{70--83}.
 \newblock
 \href{https://doi.org/10.1016/j.rse.2011.09.027}{doi:\nolinkurl{10.1016/j.rse.2011.09.027}}
+
+
+\bibitem[Yang et~al\mbox{.}(2024)]%
+        {yang2024gems}
+\bibfield{author}{\bibinfo{person}{L.~H. Yang}, \bibinfo{person}{D.~J. Jacob}, \bibinfo{person}{R. Dang}, \bibinfo{person}{Y.~J. Oak}, \bibinfo{person}{H. Lin}, \bibinfo{person}{J. Kim}, \bibinfo{person}{S. Zhai}, \bibinfo{person}{N.~K. Colombi}, \bibinfo{person}{D.~C. Pendergrass}, \bibinfo{person}{E. Beaudry}, \bibinfo{person}{V. Shah}, \bibinfo{person}{X. Feng}, \bibinfo{person}{R.~M. Yantosca}, \bibinfo{person}{H. Chong}, \bibinfo{person}{J. Park}, \bibinfo{person}{H. Lee}, \bibinfo{person}{W.-J. Lee}, \bibinfo{person}{S. Kim}, \bibinfo{person}{E. Kim}, \bibinfo{person}{K.~R. Travis}, \bibinfo{person}{J.~H. Crawford}, {and} \bibinfo{person}{H. Liao}.} \bibinfo{year}{2024}\natexlab{}.
+\newblock \showarticletitle{Interpreting Geostationary Environment Monitoring Spectrometer ({GEMS}) Geostationary Satellite Observations of the Diurnal Variation in Nitrogen Dioxide ({NO$_2$}) over East Asia}.
+\newblock \bibinfo{journal}{\emph{Atmospheric Chemistry and Physics}}  \bibinfo{volume}{24} (\bibinfo{year}{2024}), \bibinfo{pages}{7027--7039}.
+\newblock
+\href{https://doi.org/10.5194/acp-24-7027-2024}{doi:\nolinkurl{10.5194/acp-24-7027-2024}}
 
 
 \bibitem[Zoogman et~al\mbox{.}(2017)]%

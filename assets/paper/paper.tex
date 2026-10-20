@@ -1,9 +1,10 @@
 \documentclass[sigconf,nonacm]{acmart}
+\captionsetup{labelfont=bf,textfont=normalfont}
 
 \newcommand{\NOx}{NO$_x$}
 \newcommand{\modelname}{PlumeWatch}
 
-\title{Power Plant \texorpdfstring{\NOx}{NOx} Emissions Change Detection Using
+\title{Detecting Changes in Power Plant \texorpdfstring{\NOx}{NOx} Emissions Using
 Deep Learning and TEMPO Satellite Imagery}
 
 \author{Pranav Walimbe}
@@ -42,8 +43,8 @@ NASA's Tropospheric Emissions: Monitoring of Pollution (TEMPO) instrument
 provides hourly daytime observations of tropospheric nitrogen dioxide
 (NO$_2$) across North America. These observations could support independent,
 facility-level monitoring of power plant nitrogen oxides (\NOx{}) emissions,
-filling gaps caused by continuous emissions monitoring system (CEMS) failures
-and facilities not subject to hourly emissions-reporting requirements.
+filling gaps when continuous emissions monitoring system (CEMS) measurements fail
+or facilities are not subject to hourly emissions reporting requirements.
 Previous studies have estimated hourly point-source emissions
 using empirical methods, which are highly sensitive to instrument
 retrieval uncertainty, changing atmospheric conditions, TEMPO's coarse spatial
@@ -51,7 +52,7 @@ resolution, signals from nearby emission sources, and temporal mismatch with hou
 CEMS records. We instead formulate facility monitoring as change detection over
 sequences of TEMPO observations. This allows the model to learn relative emissions behavior rather
 than estimate exact emissions from noisy data. We develop a convolutional gated recurrent unit (ConvGRU) model that processes five consecutive TEMPO observations
-together with meteorological, plume-transport, and tabular features encoding time of day and seasonality to
+together with meteorological inputs, features representing plume transport, and tabular features encoding time of day and seasonality to
 classify power plant emission trajectories as increasing, steady, or decreasing.
 On a held-out evaluation set of more than 22,000 samples covering 116 active U.S. power
 plants observed between August 2023 and June 2026, the ConvGRU model achieved a
@@ -68,7 +69,7 @@ than estimating absolute emissions.
 \section{Introduction}
 
 Based on U.S. Environmental Protection Agency (EPA) inventory data, power plants
-in the U.S. electricity-generation sector emitted approximately 0.74 million
+in the U.S. electricity generation sector emitted approximately 0.74 million
 short tons of \NOx{} in 2023, about 9.5\% of national
 emissions~\cite{epa2026emissionsTrends}. \NOx{} emissions contribute to
 ground-level ozone and secondary particulate matter, pollutants that can
@@ -81,7 +82,7 @@ measurements unavailable or invalid, requiring plants to report calculated
 substitute values instead of direct measurements~\cite{epa2021substitute}.
 Behind-the-meter generators that do not sell electricity can fall outside
 federal hourly reporting requirements, such as the natural gas
-turbines powering xAI's Colossus 2 data center~\cite{gauld2026dataCenter}.
+turbines powering SpaceXAI's Colossus 2 data center~\cite{gauld2026dataCenter}.
 Outside the United States, comparable public, hourly, unit-level emissions data are generally unavailable;
 global inventories typically provide only annual estimates~\cite{huang2026detectability}. Independent estimates could therefore
 fill reporting gaps and provide timely insight into facility operations ahead of the EPA's quarterly release
@@ -95,10 +96,10 @@ Instrument (TROPOMI), typically observe a given location once per day; TEMPO's g
 view provides approximately hourly scans with finer spatial
 resolution~\cite{levelt2006omi,veefkind2012tropomi,zoogman2017tempo}. Hourly sampling
 captures intraday changes in emissions plumes and atmospheric transport that daily
-observations can miss. However, power plant emissions signals in TEMPO NO$_2$ TVCDs can be weakened
+observations can miss. However, power plant emission signals in TEMPO NO$_2$ TVCDs can be weakened
 or obscured by factors including evolving meteorology and atmospheric chemistry, cloud cover,
 viewing geometry and retrieval uncertainty, dilution within TEMPO's \(2.0~\mathrm{km} \times 4.75~\mathrm{km}\) spatial resolution, and interference from nearby emission sources~\cite{tempo2026userGuide,huang2026detectability,gauld2026dataCenter}.
-Cross-comparisons with CEMS data, which is the most reliable ground truth available, introduce an
+Comparisons with CEMS records, our most reliable ground truth, introduce an
 additional temporal mismatch because TEMPO observes a facility at a specific time during each hourly scan,
 whereas CEMS data aggregate emissions over an entire clock hour~\cite{tempo2026userGuide,epa2026powerMonitoring}.
 
@@ -113,19 +114,20 @@ the wind field with spatial gradients in the observed column to estimate a local
 source term, which is then integrated around the
 facility~\cite{santaren2025benchmarking,sun2025hourly}.
 
-Although promising, these methods have not performed consistently across source
-strengths and observing conditions. In synthetic satellite scenes with realistic
-cloud filtering and reanalysis winds, Santaren et al. reported annual relative
-RMSEs of 20\% for Gaussian plume inversion, 27\% for CSF, and 31\% for lightweight
-CSF~\cite{santaren2025benchmarking}. Cloud filtering disproportionately reduced
-wintertime coverage and prevented the methods from reliably reproducing
-month-to-month emission variability. With TEMPO observations, Sun et al. improved
+Although promising, these methods remain sensitive to source characteristics and
+observing conditions. Kuhlmann et al. applied CSF to TROPOMI NO$_2$ observations of
+18 power plants in Europe and the United States, recovering seasonal \NOx{}
+emissions variability. However, filtering for cloud cover and interference from nearby plumes
+left only 38--170 valid overpasses per plant per year, with particularly sparse
+winter coverage. These sampling gaps, together with uncertainty in chemistry
+corrections, limited the ability to resolve short-term emissions
+fluctuations~\cite{kuhlmann2026temporal}. With TEMPO observations, Sun et al. improved
 correlations with CEMS at 10 of 14 power plants by incorporating changes between
 consecutive NO$_2$ columns, although the resulting estimates remained approximately
 fourfold lower than CEMS measurements~\cite{sun2025hourly}. Beaudry et al. used a
-rise--decay model that separately fits near-source NO$_2$ buildup and downwind plume
-decay, estimating average emissions within 50\% of CEMS values at 27 of 64 plants
-but exhibiting substantially greater bias below
+model that separately fits NO$_2$ buildup near the source and plume decay downwind.
+Their average emissions estimates were within 50\% of CEMS values at 27 of 64 plants,
+but bias was substantially greater below
 \(250~\mathrm{kg~NO_2~h^{-1}}\)~\cite{beaudry2026quantification}.
 
 Machine learning (ML) studies have addressed several related point-source monitoring
@@ -135,17 +137,17 @@ surface, and sensor variables sampled at the plant location~\cite{huang2026detec
 Their models achieved F1 scores above 0.66, but detectability
 ranged from below 20\% to above 60\% for plants with similar emissions. Their
 interference filters also retained plants representing only 45.0\% of U.S. and 21.1\%
-of global NO$_x$ emissions in their datasets. Alnaim et al. used stacked long
+of global \NOx{} emissions in their datasets. Alnaim et al. used stacked long
 short-term memory (LSTM) networks to predict next-day EPA-reported NO$_2$ emissions from seven-day sequences of previous
 emissions, scalar TROPOMI observations, MERRA-2 meteorology, aerosol measurements,
 and calendar variables~\cite{alnaim2022evaluating}. Their best single-plant LSTM
 had an error near 40\%, while multi-plant experiments exceeded 55\% error and
-often underestimated extreme values. Dumont et al. trained CNNs to estimate
-power plant CO$_2$ emissions from simulated XCO$_2$ and wind fields, with optional
-NO$_2$ inputs, and obtained median relative errors of approximately 20--25\% at
-geographically held-out plants~\cite{dumont2024deepLearning}. Their evaluation used
-synthetic scenes that did not represent clouds or structured satellite-retrieval
-errors.
+often underestimated extreme values. Finch et al. developed a convolutional neural
+network (CNN) using 6,086 manually labeled TROPOMI images, achieving greater than
+90\% test accuracy for NO$_2$ plume detection. However, reliance on manual
+annotation limits the scalability of label generation, and their evaluation
+addresses plume presence rather than temporal changes in
+emissions~\cite{finch2022automated}.
 
 The point-source ML studies reviewed above do not jointly model the spatial
 structure and temporal evolution of consecutive trace-gas satellite rasters. We instead formulate
@@ -166,7 +168,7 @@ more compact recurrent model with less explicit control over long-term
 memory~\cite{shi2015convlstm,ballas2015convgru}. Spatiotemporal ViTs divide each
 raster into patches and use self-attention to connect patch representations
 across locations and timesteps. This provides direct access to global
-space--time relationships without recurrent processing, but supplies a weaker
+spatiotemporal relationships without recurrent processing, but supplies a weaker
 locality bias and shifts more pattern learning to the training data; the
 computational cost also grows with the number of patches and
 timesteps~\cite{bertasius2021timesformer}.
@@ -178,8 +180,8 @@ of model parameters. The input rasters are also small ($24 \times 24$ pixels),
 and power plant plumes generally form connected clusters of pixels whose evolution
 can be captured through local convolutional operations rather than
 long-range interactions. TEMPO also provides only about three years of
-observations, which limits the overall dataset size. A compact ConvGRU therefore provides spatial memory without the added complexity
-of ConvLSTM or a spatiotemporal ViT.
+observations, which limits the overall dataset size. We therefore use a compact
+ConvGRU to capture spatiotemporal structure while limiting model complexity.
 
 \section{Data Sources}
 
@@ -196,19 +198,21 @@ alignment with CEMS records.
 
 \subsection{CEMS Records}
 
-We downloaded hourly emissions records for individual power plant units and
-annual facility and unit attributes from the U.S. Environmental Protection
-Agency's Clean Air Markets Program Data (CAMPD) APIs for August 2023 through
-June 2026. From the hourly records, we use facility and unit identifiers,
+From the EPA's Clean Air Markets Program Data (CAMPD) APIs, we downloaded hourly
+emissions records for individual U.S. power plant units from August 2023 through
+June 2026 and annual facility and unit attributes~\cite{epa2026powerSectorData}.
+From the hourly records, we use facility and unit identifiers,
 reporting date and hour, \NOx{} mass and its measurement flag, and operating time.
 From the annual attributes, we use facility coordinates.
 
 \subsection{HRRR Weather Data}
 
-The High-Resolution Rapid Refresh (HRRR) is an hourly weather model with a
-3~km grid covering the contiguous United States. From NOAA's public HRRR
-archive, we downloaded hourly 2~m air temperature and eastward and northward
-wind components at 80~m above ground for August 2023 through June 2026.
+The High-Resolution Rapid Refresh (HRRR) is a weather prediction model updated
+hourly that covers the contiguous United States at a spatial resolution of
+3~km~\cite{noaa2026hrrrDocumentation}. From NOAA's public HRRR archive,
+we downloaded hourly 2~m air temperature and eastward and northward
+wind components at 80~m above ground for August 2023 through
+June 2026~\cite{noaa2026hrrrArchive}.
 
 \section{Methods}
 
@@ -239,19 +243,20 @@ illustrates this mapping from native footprints to the fixed AOI grid.
     }{%
         \fbox{\parbox[c][1.15in][c]{0.91\columnwidth}{\centering
         Regridding schematic placeholder}}}
-    \caption{TEMPO Level 2 regridding to the AOI grid.}
+    \caption{TEMPO NO$_2$ regridding within a 72~km $\times$ 72~km area centered on a power plant. (a) Native Level 2 footprints overlaid with the target grid. (b) Footprint values averaged by area of overlap onto a $24 \times 24$ grid of 3~km $\times$ 3~km cells.}
     \Description{TEMPO footprints mapped to the AOI grid.}
     \label{fig:tempoRegridding}
     \vspace{-0.8\baselineskip}
 \end{figure}
 
-A footprint contributes to the NO$_2$ average only when a given pixel's main data quality
-flag equals zero (TEMPO metadata that indicates reliable retrievals) and its effective cloud fraction does not exceed 0.20. Grid
+A footprint contributes to the NO$_2$ average only when its main data quality
+flag equals zero, indicating a reliable retrieval, and its effective cloud fraction does not exceed 0.20. Grid
 cells without an accepted footprint overlap remain masked, and we retain a
 binary mask of the original valid cells. We use bilinear interpolation to fill
 masked NO$_2$ pixels for downstream modeling.
 
 \subsection{Sample Construction}
+\label{sec:sample-construction}
 
 Each sample contains five consecutive observations of one AOI, indexed from
 $t_0$ to $t_4$. We retain a sequence only when each pair of adjacent TEMPO
@@ -281,8 +286,36 @@ $\theta=250~\mathrm{lb\,h^{-1}}$ to assign its category:
     \end{cases}
 \end{equation}
 
-Figure~\ref{fig:sample-construction} shows one complete five-timestep model
-input and its derived behavior label.
+We chose the threshold $\theta=250~\mathrm{lb\,h^{-1}}$ based on the balance between
+valid sample counts across classes and separability between classes from larger emissions deltas,
+which we visualize in Figure~\ref{fig:label-threshold-samples}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{visuals/label-threshold-samples.pdf}
+  \caption{Eligible increase and decrease sample counts across \NOx{} emissions
+  change thresholds, before raster quality filtering and class balancing.}
+  \Description{Curves show the eligible increase and decrease sample counts falling as the emissions change threshold rises from 0 to 1,000 pounds per hour. A dashed line marks the selected threshold of 250 pounds per hour.}
+  \label{fig:label-threshold-samples}
+\end{figure}
+
+Requiring a substantial emissions change helps make the classes distinguishable
+despite noise in the TEMPO NO$_2$ rasters. Even at the
+250~$\mathrm{lb\,h^{-1}}$ threshold, however, the visual evidence can vary
+markedly between samples, as the two increase-labeled sequences in
+Figure~\ref{fig:no2-class-agreement-examples} illustrate.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{visuals/no2-class-agreement-examples.pdf}
+  \caption{Two five-observation TEMPO NO$_2$ sequences with CEMS-derived increase labels. (a) An AOI centered on the Victor H. Braunig Power Station in San Antonio, Texas, observed on August 25, 2023, shows a clear visual pattern of increasing emissions. (b) An AOI centered on the High Bridge Generating Station in St. Paul, Minnesota, observed on September 16, 2025, shows little visual evidence of increasing emissions. Both sequences exceed the 250~$\mathrm{lb\,h^{-1}}$ \NOx{} emissions change threshold.}
+  \Description{Two rows of five consecutive TEMPO NO2 rasters, each labeled as an increase from CEMS emissions. The first row shows clear visual agreement with the increase label; the second shows less apparent agreement. Both rows share the same color scale.}
+  \label{fig:no2-class-agreement-examples}
+\end{figure}
+
+Figure~\ref{fig:sample-construction} then shows a complete five-observation
+training sample, combining its NO$_2$ sequence with the other model inputs and
+its derived label.
 
 \begin{figure*}[t]
   \centering
@@ -293,7 +326,7 @@ input and its derived behavior label.
       \textit{Placeholder: complete five-timestep raster inputs, transport residuals,}\\[0.25em]
       \textit{and emissions change behavior label}}}
   }
-  \caption{Complete model inputs and behavior label for one five-timestep training sample.}
+  \caption{Five-observation training sample (validity masks excluded) from an AOI centered on the Hugh L. Spurlock Generating Station in Maysville, Kentucky, observed on February 26, 2025. Panels (a)--(c) show the NO$_2$, wind, and temperature inputs at $t_0$--$t_4$; (d) shows the four residuals between adjacent observations; and (e) shows the temporal features.}
   \Description{Five NO2, wind, and temperature rasters, four transport residuals,
   and the associated emissions change behavior label.}
   \label{fig:sample-construction}
@@ -302,8 +335,9 @@ input and its derived behavior label.
 \subsection{Transport Model}
 
 Emissions change signals in consecutive NO$_2$ rasters can be degraded by
-movement and decay of the existing plume. For each adjacent
-pair, we use a simple transport model to predict the next NO$_2$ observation without new emissions in the AOI.
+movement and decay of the existing plume. For each pair of consecutive NO$_2$
+rasters, we use a simple transport model to predict the next observation without
+new emissions in the AOI.
 We then subtract this prediction from the observed next raster to obtain a
 transport residual, which separates plume structure explained by modeled
 advection, horizontal dispersion, and chemical decay from remaining variation that may
@@ -345,6 +379,8 @@ follows:
 \end{align}
 \endgroup
 
+We selected the values of $\lambda$, $\gamma$, $\sigma_0$, and $\tau$ using
+the tuning procedure described in Section~\ref{sec:transport-parameter-tuning}.
 Equations~\eqref{eq:transport-wind} and
 \eqref{eq:transport-advection} represent wind-driven advection. Satellite
 columns do not resolve the vertical distribution of plume mass, so
@@ -370,16 +406,17 @@ Equation~\eqref{eq:transport-decay} applies first-order loss to the
 above-background enhancement. The effective timescale $\tau=8$~h represents
 the combined persistence of the observed NO$_2$ plume under chemical removal
 and other unresolved losses. Exponential loss is commonly used to describe the downwind decay of
-satellite-observed NO$_x$ plumes, whose effective lifetimes vary with
+satellite-observed \NOx{} plumes, whose effective lifetimes vary with
 meteorology and plume chemistry~\cite{meier2024conversion}.
 Equation~\eqref{eq:transport-residual} subtracts the resulting transport-only
 prediction from the next observation.
 
-Each five-observation sample yields four residual rasters. We apply the same
-advection and diffusion operations to the earlier validity mask and combine it
-with the later mask to produce quality masks for the transport residuals. The transport-residual panel in
-Figure~\ref{fig:sample-construction} shows the four adjacent-scan residuals for
-the same example sequence.
+Each five-observation sample produces four transport-residual rasters, one for
+each pair of consecutive NO$_2$ rasters. For each pair, we advect and diffuse
+the earlier observation's validity mask alongside its NO$_2$ raster, then
+multiply it by the later observation's mask to form the residual's quality mask.
+Figure~\ref{fig:sample-construction} shows all four residuals for the example
+sample.
 
 \subsection{Dataset Stratification}
 
@@ -393,7 +430,7 @@ assignment cannot generally meet every target exactly.
 
 We use mixed-integer linear programming (MILP) to assign each
 cluster to exactly one split while minimizing normalized deviations from
-target AOI and eligible-sample counts. The first optimization targets a
+target counts of AOIs and eligible samples. The first optimization targets a
 70\%/15\%/15\% sample stratification using AOI and sample counts,
 after which we fix the training clusters. A second optimization assigns the
 remaining clusters equally between validation and test while balancing AOI,
@@ -403,17 +440,32 @@ the same median number of plant units per AOI as the combined held-out pool.
 We then uniformly downsample each training class to the size of the smallest
 class. In validation and test, we retain every increase and decrease sample and
 uniformly subsample steady samples to at most the size of the larger non-steady
-class. Subsequent raster-quality filtering can alter the final class counts,
-and we do not rebalance the surviving samples.
+class.
+
+We then apply the raster filtering described in
+Section~\ref{sec:sample-construction}. Across the three splits, 19.4\% of
+selected decrease samples, 25.5\% of steady samples, and 32.4\% of increase
+samples are retained through raster filtering. The retention pattern is
+primarily driven by seasonal cloud cover: decrease samples occur more often in
+winter, steady samples are less seasonally concentrated, and increase samples
+occur more often in summer.
+Table~\ref{tab:dataset-composition} reports the final dataset and class counts.
 
 \subsection{ConvGRU Model}
 
-The ConvGRU model encodes five observation frames and four interval-aligned
-transport residuals using branch-specific convolutional encoders whose weights
-are shared across time. It updates a spatial hidden state over four recurrent
-transitions, then combines the final visual representation with time-derived
-tabular features for classification. Figure~\ref{fig:convgru-architecture}
-summarizes the complete architecture and one ConvGRU cell.
+Each sample supplies five $24\times24$ observation frames and four
+transport-residual frames, one for each consecutive NO$_2$ transition. An
+observation frame contains NO$_2$, its quality mask, eastward and northward
+80~m winds, and 2~m temperature. A residual frame contains the transport
+residual and its quality mask. The model also receives four time-derived tabular
+features computed at the sequence midpoint.
+
+Separate convolutional encoders process the observation and residual frames,
+sharing weights across time within each branch. A ConvGRU updates a spatial
+hidden state over four transitions. The model then combines the final visual
+representation with the time-derived features to classify emissions change
+behavior. Figure~\ref{fig:convgru-architecture} shows the architecture and one
+ConvGRU cell.
 
 \begin{figure*}[t]
   \centering
@@ -438,7 +490,10 @@ summarizes the complete architecture and one ConvGRU cell.
       \textbf{(b) ConvGRU cell placeholder}\\[0.3em]
       Reset gate, update gate, candidate state, and hidden-state update}}
   }
-  \caption{(a) ConvGRU high-level architecture. (b) ConvGRU cell design.}
+  \caption{ConvGRU architecture for emissions change
+  classification. (a) Observation and transport-residual encoders, four
+  recurrent transitions, and late fusion with time-derived tabular features.
+  (b) Reset, update, and hidden-state operations within one ConvGRU cell.}
   \Description{The overall ConvGRU architecture shows observation and transport-residual
   encoding, repeated recurrent transitions, final-state projection, tabular late fusion,
   and three-class output. A second diagram expands the reset, update, candidate,
@@ -446,13 +501,9 @@ summarizes the complete architecture and one ConvGRU cell.
   \label{fig:convgru-architecture}
 \end{figure*}
 
-Each observation frame contains five channels: NO$_2$, its quality mask, the
-eastward and northward 80~m wind components, and 2~m temperature. Each
-transport-residual frame contains the residual and its quality mask. Separate
-observation and residual encoders account for the different meanings of these
-inputs. We denote them $E_x$ and $E_r$, respectively, in
-Figure~\ref{fig:convgru-architecture}(a). The same encoder weights process every
-frame within a branch.
+We denote the observation and residual encoders $E_x$ and $E_r$,
+respectively, in Figure~\ref{fig:convgru-architecture}(a). Separate encoders
+account for the different meanings of their inputs.
 Both encoders begin with a $5\times5$ convolution that produces 32 channels,
 followed by five residual blocks. Strided blocks increase the channel width
 from 32 to 48 and then 64 while reducing each $24\times24$ raster to a
@@ -497,34 +548,46 @@ how much of that candidate replaces the previous state.
 After the fourth recurrent update, global average and maximum pooling summarize
 distributed and localized evidence, respectively, in the final hidden state.
 The model concatenates their outputs and projects them into a visual embedding.
-The tabular branch receives four cyclic features computed at the sequence
-midpoint: the sine and cosine of local solar hour and the sine and cosine of day
-of year. A feedforward encoder maps them into a tabular embedding. The model
-introduces this embedding only after recurrent processing, a late-fusion design
-that keeps the tabular features out of the spatial state updates. The fused
-representation passes through the classification head to produce logits for
-the three behavior classes.
+A feedforward encoder maps four time-derived tabular features (the sine and
+cosine of local solar hour and of day of year) into a tabular embedding. The
+model adds this embedding after recurrent processing, keeping the tabular
+features out of the spatial state updates. The fused representation passes
+through a classification head to produce logits for the three behavior classes.
 
 \subsection{Baseline MLP Model}
 
-We use a lightweight baseline MLP with time-derived features to gauge how much emissions change
-behavior can be predicted from recurring daily and annual patterns without
-satellite or weather inputs. We represent each sample using four cyclic
-features computed at the sequence midpoint: the sine and cosine of local solar
-hour and the sine and cosine of day of year. The baseline MLP maps these
-features through 16- and
-8-unit hidden layers, each with layer normalization and a SiLU activation,
+We use a lightweight baseline MLP to gauge how much emissions change behavior
+can be predicted from recurring daily and annual patterns without satellite or
+weather inputs. It uses the same four time-derived tabular features as the
+ConvGRU. The baseline MLP maps these features through 16- and 8-unit hidden
+layers, each with layer normalization and a SiLU activation,
 followed by a linear layer that produces logits for the three behavior classes.
+
+\subsection{Transport Model Parameter Tuning}
+\label{sec:transport-parameter-tuning}
+
+We tuned the transport model on steady samples from the validation split to assess its ability to
+predict NO$_2$ plume evolution during periods of relatively stable
+\NOx{} emissions. We sampled 2,500 records and randomly selected one consecutive NO$_2$ raster transition
+from each record.
+
+We evaluated the wind-blending factor $\lambda$, wind-speed scale $\gamma$,
+dispersion width $\sigma_0$, and decay timescale $\tau$ using
+the L1 loss between the transport model's predicted NO$_2$ raster
+$\widehat{N}_{i+1}$ and the observed raster $N_{i+1}$. The parameter set $\lambda=0.5$, $\gamma=0.8$,
+$\sigma_0=1$, and $\tau=8$ yielded the lowest error from this procedure.
 
 \subsection{Training Procedure}
 
-Table~\ref{tab:dataset-composition} summarizes the final dataset used to train
-and evaluate both models. We standardize the NO$_2$, wind, temperature, and
+We standardize the NO$_2$, wind, temperature, and
 transport residual rasters and the tabular inputs in every split using means
 and standard deviations computed from the training split.
 
 \begin{table}[t]
-  \caption{Dataset composition by split and class.}
+  \caption{Final modeling dataset composition by split and behavior class. AOIs
+  are distinct 72~km $\times$ 72~km bounding boxes centered on power plants. An
+  active plant has nonzero operating time during at least one observed hour in
+  the dataset.}
   \label{tab:dataset-composition}
   \centering
   \small
@@ -542,8 +605,15 @@ and standard deviations computed from the training split.
   \end{tabular}
 \end{table}
 
+We tuned the ConvGRU by varying model width, initial learning rate, weight
+decay, and activation dropout, selecting the configuration with the highest
+validation macro-F1. Table~\ref{tab:training-configuration} reports the
+selected values and other settings used for final model training.
+
 \begin{table}[t]
-  \caption{Training configuration.}
+  \caption{Training parameters and setup details for the baseline MLP and
+  ConvGRU. Entries spanning both model columns apply to both models; dashes
+  indicate parameters not used by the MLP.}
   \label{tab:training-configuration}
   \centering
   \small
@@ -552,6 +622,7 @@ and standard deviations computed from the training split.
     Parameter & Baseline MLP & ConvGRU \\
     \midrule
     Trainable parameters & 291 & 724,939 \\
+    Model width & -- & 64 \\
     Optimizer & \multicolumn{2}{c}{AdamW} \\
     Batch size & 128 & 128 \\
     Initial learning rate & $10^{-3}$ & $6.04 \times 10^{-5}$ \\
@@ -583,242 +654,277 @@ training split and minimize weighted cross-entropy.
 
 \begin{figure*}[!t]
   \centering
-  \includegraphics[width=\textwidth]{visuals/classification-performance.pdf}
-  \caption{Classification performance by split.}
-  \Description{Baseline MLP and ConvGRU per-class F1, per-class recall, and
-  aggregate classification metrics for the training, validation, and test splits.}
+  \includegraphics[width=\textwidth]{visuals/classification-performance-test.pdf}
+  \caption{Test set performance of the baseline MLP and ConvGRU for emissions
+  change classification. (a) F1 and (b) recall for the decrease, steady, and
+  increase classes; (c) macro-F1 across classes.}
+  \Description{Baseline MLP and ConvGRU F1 and recall for the decrease, steady,
+  and increase classes, and macro-F1 on the test set.}
   \label{fig:classification-performance}
 \end{figure*}
 
-We evaluate classification using macro-F1 and balanced accuracy to account for class imbalance.
-On the test set, the ConvGRU model achieves a macro-F1 of 0.559 and balanced accuracy of 0.563, compared with 0.454 and 0.481
-for the baseline MLP. As shown in Figure~\ref{fig:classification-performance},
-the ConvGRU model demonstrates improved per-class F1 and recall scores over the baseline MLP across nearly
-all per-split evaluations.
+We use F1 to summarize the balance between precision and recall for each
+behavior class, and macro-F1 to give the three classes equal weight despite
+unequal sample counts. Figure~\ref{fig:classification-performance} compares the
+models on the test set. The ConvGRU achieves a macro-F1 of 0.56, compared with
+0.45 for the baseline MLP.
 
-The largest performance gap between the models consistently occurs for steady samples, ranging from 0.141 to 0.143 F1 points
-across splits. This makes intuitive sense because steady samples are less likely to belong to a distinct season
-(e.g., increases occur more often during summer and decreases occur more often during winter), which means time-only features explain less variation in plant emissions
-activity for those samples. The ConvGRU model shows its weakest performance on decrease samples, with a test recall of 0.471,
-below the baseline MLP's 0.527. The weaker performance on decrease samples may
-have two causes. First, decrease events are less prevalent than increase events in the dataset, giving the model fewer
-examples from which to learn. Second, after facility emissions decline, previously emitted NO$_2$ can remain visible as
-the plume advects, disperses, and decays, delaying the raster response to the underlying activity change.
+ConvGRU macro-F1 was 0.62 on training and 0.60 on validation, while the
+baseline MLP scored 0.53 on both. Both models scored lower on the test set, but
+the ConvGRU's advantage persisted.
+
+The ConvGRU's largest test set F1 gain is for steady samples (0.142 points).
+The monthly class composition in Figure~\ref{fig:stratified-performance-monthly}
+suggests why: increases are more common in summer and decreases in winter, while
+steady samples show a weaker seasonal pattern, giving the time-only baseline
+less information. Decrease remains the ConvGRU's weakest class, with test recall
+of 0.471 versus 0.527 for the baseline MLP. This may reflect fewer decrease
+training samples and a delayed raster response: NO$_2$ emitted before a decline
+remains visible as the plume advects, disperses, and decays.
 
 \subsection{Performance Across Evaluation Strata}
 
 \subsubsection{Performance Across Months}
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
-  \includegraphics[width=0.86\columnwidth]{visuals/stratified-performance-monthly.pdf}
-  \caption{Classification accuracy by month.}
-  \Description{Baseline MLP and ConvGRU classification accuracy for each month.}
+  \includegraphics[width=0.86\columnwidth]{visuals/monthly-sample-composition.pdf}
+  \caption{Test set performance and class composition by month. (a)
+  Classification accuracy of the baseline MLP and ConvGRU. (b) Number of samples
+  in each emissions change class (decrease, steady, and increase) by month.}
+  \Description{Monthly test set accuracy of the baseline MLP and ConvGRU above
+  stacked sample counts for the decrease, steady, and increase classes.}
   \label{fig:stratified-performance-monthly}
 \end{figure}
 
-As shown in Figure~\ref{fig:stratified-performance-monthly}, the ConvGRU model
-shows more consistent monthly accuracy than the baseline MLP. The models perform
-most similarly during summer, while their accuracy gap reaches 0.277 in April
-and 0.323 in November. These results are consistent with our observation that increase samples occur more often during summer
-and decrease samples occur more often during winter. While the baseline MLP is restricted to learning seasonal patterns for
-power plant activity only, the ConvGRU model can use visual signal to predict emissions behavior when seasonality alone is
-generally a poor indicator of activity, such as during spring and fall.
+Figure~\ref{fig:stratified-performance-monthly} shows that ConvGRU accuracy
+varies less by month than baseline MLP accuracy. Their results are closest in
+summer, but ConvGRU accuracy exceeds MLP accuracy by 0.277 in April and 0.323
+in November. Panel (b) shows that increases are especially common in summer,
+while steady samples make up a larger share in spring and late fall, when the
+models differ more. This pattern is consistent with the MLP relying on seasonal
+class prevalence, whereas the ConvGRU can also use raster inputs to identify
+plant activity.
 
 \subsubsection{Performance by Local Solar Hour}
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
-  \includegraphics[width=0.86\columnwidth]{visuals/stratified-performance-solar-hour.pdf}
-  \caption{Classification accuracy by midpoint local solar hour.}
-  \Description{Baseline MLP and ConvGRU classification accuracy for each
-  midpoint local solar hour.}
+  \includegraphics[width=0.86\columnwidth]{visuals/solar-hour-sample-composition.pdf}
+  \caption{Test set performance and class composition by local solar hour at
+  the sequence midpoint. (a) Classification accuracy of the baseline MLP and
+  ConvGRU. (b) Number of samples in each emissions change class (decrease,
+  steady, and increase) by hour.}
+  \Description{Test set accuracy of the baseline MLP and ConvGRU by midpoint
+  local solar hour above stacked sample counts for the decrease, steady, and
+  increase classes.}
   \label{fig:stratified-performance-solar-hour}
 \end{figure}
 
-As shown in Figure~\ref{fig:stratified-performance-solar-hour}, accuracy
-generally declines from morning to afternoon for both models, although the
-ConvGRU model outperforms the baseline MLP over nearly all hours. This pattern
-is consistent with changes in class composition across the day: increase
-samples are more prevalent earlier, whereas decrease samples, on which both
-models perform less accurately, become more prevalent later. Because accuracy
-depends on class prevalence, these results do not isolate an independent effect
-of solar hour.
-
-\subsubsection{Performance by AOI Median \NOx{} Emissions}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.86\columnwidth]{visuals/stratified-performance-aoi-nox.pdf}
-  \caption{Macro-F1 by AOI median \NOx{} emissions group.}
-  \Description{Baseline MLP and ConvGRU macro-F1 for AOIs in the lower and
-  upper halves of median NOx emissions.}
-  \label{fig:stratified-performance-aoi-nox}
-\end{figure}
-
-As shown in Figure~\ref{fig:stratified-performance-aoi-nox}, macro-F1 increases
-from 0.42 to 0.46 for the baseline MLP and from 0.51 to 0.56 for the ConvGRU
-model between the lower and upper halves of test AOIs by median \NOx{}
-emissions. Because both models improve similarly, higher-emission AOIs appear
-to constitute an easier prediction subset rather than providing an advantage
-attributable only to stronger raster signals. The ConvGRU model retains a
-nearly constant advantage over the baseline in both groups, indicating that
-the raster inputs provide additional information across the observed emissions
-range. Class composition, operating regularity, and source density may also
-contribute to the difference between groups.
+Figure~\ref{fig:stratified-performance-solar-hour} shows that both models
+generally lose accuracy after the morning hours. The ConvGRU outperforms the
+baseline MLP from 08:00 through 16:00. Panel (b) shows that sample counts peak
+around 10:00--11:00 and are sparse at the earliest and latest hours; the class
+mix also changes through the day. These aggregate results therefore do not
+isolate an effect of solar hour from differences in class composition.
 
 \subsubsection{Performance by Census Region}
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.86\columnwidth]{visuals/stratified-performance-census-region.pdf}
-  \caption{Macro-F1 by AOI-center Census region.}
-  \Description{Baseline MLP and ConvGRU macro-F1 for AOIs in the Midwest,
-  South, and West Census regions.}
+  \caption{Test set performance and class composition by Census region of the
+  AOI center. (a) macro-F1 of the baseline MLP and ConvGRU. (b) Number of
+  samples in each emissions change class (decrease, steady, and increase) by
+  region.}
+  \Description{Test set macro-F1 of the baseline MLP and ConvGRU for AOIs in the
+  Midwest, South, and West above stacked sample counts for the decrease,
+  steady, and increase classes in each region.}
   \label{fig:stratified-performance-census-region}
 \end{figure}
 
-As shown in Figure~\ref{fig:stratified-performance-census-region}, the ConvGRU
-model reaches macro-F1 scores of 0.57 in the South, 0.51 in the West, and 0.46 in the Midwest,
-while the baseline MLP's performance remains near 0.45 across all three regions.
-Regional class composition may contribute to these differences. Increase
-samples comprise 50.5\% of Southern test records, the Midwest has the largest
-decrease share at 26.1\%, and steady samples comprise 58.9\% of Western records.
+Figure~\ref{fig:stratified-performance-census-region} shows ConvGRU macro-F1 of
+0.57 in the South, 0.51 in the West, and 0.46 in the Midwest, while the baseline
+MLP remains near 0.45 in all three regions. The ConvGRU's regional pattern
+broadly tracks the class mix in panel (b): its score is highest where increase
+samples are most prevalent and lowest where decrease samples have the largest
+share. The West, where steady samples dominate, falls between them. Class
+composition may contribute to these differences, though this comparison does
+not isolate its effect. The test split contains no Northeastern AOIs.
 
-AOI source density follows the same ordering as the ConvGRU model's performance. Southern
-test AOIs average 5.05 active plants and 17.92 units, compared with 4.00 plants
-and 13.59 units in the West and 2.71 plants and 6.71 units in the Midwest. The
-Midwest also shows the largest shift from its training distribution, where AOIs
-average 4.29 active plants and 13.10 units. Source density and similarity to the
-training distribution may therefore affect the strength and generalizability of
-the visual emissions patterns available to the ConvGRU model.
+\subsubsection{Performance by \NOx{} Change Magnitude}
 
-Training representation may also matter. Southern records comprise 62.8\% of
-the training set, compared with 21.3\% from the Midwest and 5.1\% from the West.
-Class composition, source density, fuel mix, facility design, and operating
-practices vary together, so this aggregate comparison cannot isolate their
-individual effects. We exclude the Northeast because the test split contains no
-Northeastern AOIs.
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.86\columnwidth]{visuals/stratified-performance-change-magnitude.pdf}
+  \caption{Test set performance by \NOx{} emissions change magnitude within
+  increase and decrease classes. Within each class, samples are split into
+  lower and upper halves at the median absolute emissions change.}
+  \Description{Baseline MLP and ConvGRU F1 scores for the lower and upper halves
+  of absolute NOx emissions change among decrease and increase samples.}
+  \label{fig:stratified-performance-change-magnitude}
+\end{figure}
+
+Figure~\ref{fig:stratified-performance-change-magnitude} shows that
+lower-magnitude decreases are the ConvGRU's weakest group among those plotted:
+its score is 0.59, compared with 0.69 for larger decreases. The baseline MLP
+scores 0.68 on smaller decreases, while the models perform similarly on larger
+decreases. By contrast, the ConvGRU's scores for smaller and larger increases
+are nearly identical (0.81 and 0.83). Smaller decreases may therefore be a
+principal source of its weaker performance on decrease events overall. This
+pattern is consistent with a lag in the raster response: NO$_2$ emitted before
+a unit's emissions decline or stop can remain visible as it advects and decays,
+making smaller decreases harder to distinguish.
 
 \subsection{Ablation Study}
 
-We retrain the ConvGRU model for each ablation in Table~\ref{tab:ablation-study},
-where feature removal refers to fully zeroing out a given feature for all dataset samples. For a timestep ablation, we remove the
-NO$_2$ and weather rasters at that timestep but retain the transport residual
-input that overlaps it. We exclude a $t_0$ removal ablation because it initializes the hidden state for the ConvGRU
-model and therefore cannot be compared in the same manner as the other timesteps.
+We retrain the ConvGRU for each ablation in Table~\ref{tab:ablation-study},
+zeroing the listed input for every sample. For timestep ablations, we zero the
+NO$_2$ and weather rasters but retain overlapping transport residuals. We omit
+$t_0$ because it initializes the hidden state, making its removal different
+from removing later observations.
 
-Ablation results show that removing the time-derived tabular features or wind
-rasters reduced test macro-F1 by only 0.74 and 0.27 percentage points,
-respectively, indicating limited marginal value when the other inputs were
-available. Removing the transport residuals produced the largest decline of
-12.58 percentage points, suggesting that the model relies primarily on
-spatiotemporal raster information and benefits from a physics-guided
-representation that distinguishes observed changes from predicted plume
-transport, dispersion, and decay. Removing the temperature rasters reduced
-macro-F1 by 4.87 percentage points, substantially more than removing wind.
-Temperature may indirectly capture variation in electricity demand and plant
-activity, although it may also encode meteorological conditions affecting plume
-evolution and NO$_2$ retrieval.
+Removing transport residuals causes the largest drop in test macro-F1 (12.58
+percentage points), including a fall in steady F1 from 0.52 to 0.31. This
+suggests the model uses deviations from predicted plume transport to
+distinguish emissions changes from plume transport. Removing temperature costs
+4.87 points and particularly hurts increase F1 (0.69 to 0.57). Temperature may
+help the model interpret atmospheric effects in the rasters, although it could
+also act as a proxy for electricity demand. Removing tabular features costs
+only 0.74 points, supporting the view that the ConvGRU identifies emissions
+trajectories primarily from visual inputs rather than seasonal timing alone.
+Removing wind rasters costs only 0.27 points, but wind also enters the transport
+residual calculation, so this does not establish that wind is uninformative.
 
-\begin{table}[H]
-  \caption{Ablation study on the test split.}
+\begin{table}[t]
+  \caption{ConvGRU ablation performance on the test set. Each ablated model was
+  retrained with the listed input zeroed out for all samples. Baseline is the
+  full-input ConvGRU.}
   \label{tab:ablation-study}
   \centering
-  \fontsize{7.5pt}{9pt}\selectfont
-  \setlength{\tabcolsep}{2.25pt}
-  \begin{tabular}{@{}lccccc@{}}
+  \small
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabular}{@{}lcccc@{}}
     \toprule
     \shortstack[l]{Input feature\\removed} &
-    \shortstack{Test\\macro-F1} &
-    \shortstack{Test\\balanced\\accuracy} &
-    \shortstack{Test\\decrease\\F1} &
-    \shortstack{Test\\steady\\F1} &
-    \shortstack{Test\\increase\\F1} \\
+    \shortstack{macro-\\F1} &
+    \shortstack{Decrease\\F1} &
+    \shortstack{Steady\\F1} &
+    \shortstack{Increase\\F1} \\
     \midrule
-    None (baseline)            & 0.5582 & 0.5667 & 0.4614 & 0.5233 & 0.6901 \\
-    \midrule
-    Wind rasters               & 0.5555 & 0.5661 & 0.4577 & 0.5407 & 0.6683 \\
-    Temperature rasters        & 0.5095 & 0.5265 & 0.4217 & 0.5349 & 0.5719 \\
-    Transport residuals        & 0.4324 & 0.4859 & 0.3640 & 0.3088 & 0.6245 \\
-    Time-derived tabular features & 0.5508 & 0.5673 & 0.4634 & 0.5080 & 0.6808 \\
-    $t_1$ observation          & 0.5423 & 0.5379 & 0.4421 & 0.5616 & 0.6232 \\
-    $t_2$ observation          & 0.5439 & 0.5562 & 0.4666 & 0.5404 & 0.6248 \\
-    $t_3$ observation          & 0.5253 & 0.5274 & 0.4487 & 0.4965 & 0.6309 \\
-    $t_4$ observation          & 0.5374 & 0.5406 & 0.4657 & 0.5108 & 0.6359 \\
+    Baseline                   & 0.56 & 0.46 & 0.52 & 0.69 \\
+    Wind rasters               & 0.56 & 0.46 & 0.54 & 0.67 \\
+    Temperature rasters        & 0.51 & 0.42 & 0.53 & 0.57 \\
+    Transport residuals        & 0.43 & 0.36 & 0.31 & 0.62 \\
+    Tabular features           & 0.55 & 0.46 & 0.51 & 0.68 \\
+    \addlinespace
+    $t_1$ observation          & 0.54 & 0.44 & 0.56 & 0.62 \\
+    $t_2$ observation          & 0.54 & 0.47 & 0.54 & 0.62 \\
+    $t_3$ observation          & 0.53 & 0.45 & 0.50 & 0.63 \\
+    $t_4$ observation          & 0.54 & 0.47 & 0.51 & 0.64 \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 \section{Discussion}
 
-The ConvGRU model's improvement over the baseline MLP indicates that
-consecutive TEMPO rasters contain information associated with facility activity
-beyond recurring daily and seasonal patterns.
+\subsection{Evaluation of Model Results}
 
-Performance differences across classes provide insight into the task. The
-largest gain over the baseline occurred for steady classifications, for which
-time-derived patterns offered limited discrimination. Decreases remained more
-difficult to identify than increases. Residual plume mass can persist after emissions decline,
-creating a lag between the CEMS-derived label and the observed NO$_2$ field.
-Differences across months and solar hours may also reflect changes in class
-prevalence, cloud coverage, retrieval quality, and atmospheric lifetime.
-Regional variation could arise from differences in emissions magnitude, fuel
-mix, operating practices, or sample composition. These factors remain
-confounded in the current analysis and require controlled comparisons before
-assigning a causal explanation.
+The ConvGRU uses raster information about power plant activity beyond time of day
+and seasonality. Its advantage over the baseline MLP is greatest for steady
+samples, where features derived from time are less informative. Transport residuals
+contribute most to the model's performance in the ablation study, particularly
+for steady samples. This suggests that accounting for plume transport helps the
+model distinguish emissions behavior from changes in atmospheric conditions.
+The ConvGRU performs worse on decreases than on increases, possibly because
+decreases are less common in the training set and previously emitted NO$_2$ can
+remain visible after emissions fall.
 
-The ablations support the value of physics-guided preprocessing. Transport
-residuals may help expose changes that raw raster sequences obscure through
-plume motion and decay. The small effect of removing wind rasters does not
-imply that wind is uninformative because the transport residuals already encode
-wind-derived information. Temperature may capture both plume behavior and
-demand-related operating patterns, so its contribution cannot yet be
-attributed to one mechanism.
+Across the monthly, hourly, and regional subsets, both models tend to perform
+better when increases are more prevalent than when decreases are more prevalent.
+The ConvGRU's advantage tends to grow as the share of steady samples rises. A
+binary task that separates increases from all other behavior might therefore be
+easier to learn, since it would not require the model to distinguish decreases
+from steady periods. Future work could test this framing during operating hours
+when increasing activity is more common and its visual signal may be clearer.
 
-Several limitations constrain interpretation. TEMPO measures NO$_2$ columns,
-whereas CEMS reports stack-level NO$_x$ emissions. Retrieval uncertainty,
-masked pixel interpolation, simplified transport assumptions, and temporal
-mismatch can weaken their correspondence. Because an AOI may contain multiple
-power plants, its label represents their aggregate emissions change and cannot
-identify which facility produced the observed signal. The short TEMPO record
-and restriction to U.S. power plants limit evidence for transfer across years,
-regions, and source types.
+\subsection{Implications for Power Plant Monitoring}
 
-Future studies should reevaluate the method as more TEMPO observations become
-available and as retrieval algorithms improve. Future instruments with finer
-spatial resolution may provide another opportunity for evaluation. More
-granular ablations and controlled analyses could separate the effects of
-retrieval quality, meteorology, plant characteristics, and class prevalence.
-Sensitivity analyses should also vary the \NOx{}
-change thresholds used to construct the behavior labels. Model comparisons
-could include ConvLSTM and other spatiotemporal architectures, while
-sequence-length experiments could test whether fewer scans suffice or longer
-histories better capture plume evolution. Finally, future versions could
-replace the current transport calculation with a more complete treatment of
-advection, dispersion, chemistry, and plume injection height. Researchers
-could tune and validate its parameters using observed sequences in which CEMS
-reports near-zero emissions, allowing them to evaluate the transported
-prediction with little contribution from newly emitted \NOx{}.
+Satellite plume inversion depends on observations that distinguish a plant's plume from nearby emissions.
+Low source emissions, nearby sources, cloud screening, and very low or high wind speeds can reduce the number
+of usable observations or increase uncertainty in emission-rate estimates~\cite{huang2026detectability,kuhlmann2026temporal,santaren2025benchmarking}.
+Our model instead classifies relative emissions changes across 72~km $\times$ 72~km AOIs while accounting
+for transport dynamics. This design could extend activity monitoring to some clustered or urban settings
+where plume inversion is difficult, although we have not directly evaluated that comparison.
+
+This modeling approach may also be useful for detecting when specific units or entire facilities
+go offline or come back online due to either a planned outage or an equipment failure. Public access to
+unit-level outage information varies by independent system operator (ISO): CAISO publishes daily unit-level reports,
+ERCOT publishes unplanned resource outages after a three-day delay, and PJM releases only aggregate outage
+information~\cite{caiso2026outages,ercot2026unplannedOutages,pjm2026dataAvailability}.
+For facilities subject to CEMS reporting, periods of nonoperation and subsequent restarts can instead be
+inferred retrospectively from quarterly EPA operating and emissions data~\cite{epa2026powerSectorGuide,epa2026powerSectorData}.
+The current ConvGRU infers emissions trajectories across each AOI. A model that
+jointly predicts the activity label and a spatial contribution raster could
+identify which pixels support a predicted change and help isolate facilities
+whose units exhibit behavior consistent with an outage.
+
+Another relevant activity is a substantial increase or decrease in a large unit's emissions that lasts
+several hours or more. Such changes can reflect routine dispatch rather than an outage, and they occur more
+frequently than outage events. Hourly generation by balancing authority
+and fuel is public, but unit-level dispatch or output may remain confidential or appear only after a delay,
+as in PJM and ERCOT~\cite{eia2026hourlyGrid,pjm2026dataAvailability,ercot2026dispatchDisclosure}.
+Joint predictions of activity and pixel contributions could help identify which
+facilities in an AOI exhibit emissions changes consistent with a major increase
+or decrease in generation from one or more units.
+
+Growing demand for power plants dedicated to data centers creates a need for remote sensing methods to
+monitor activity at facilities outside federal CEMS reporting programs~\cite{eia2026dataCenterDemand,gauld2026dataCenter,epa2026islandedGeneration}.
+Existing facilities already use multiple natural gas turbines to supply data centers, while planned facilities
+may use turbines or reciprocating engines to meet similarly large, relatively steady electricity loads~\cite{gauld2026dataCenter,epa2026islandedGeneration,eia2026serverLoad}. Our model may
+offer a way to detect short-term changes in activity at these facilities. These activity estimates could
+complement inverse modeling estimates of emission rates, which require suitable observations and assumptions
+about atmospheric transport~\cite{santaren2025benchmarking,kuhlmann2026temporal}.
+
+\subsection{Limitations and Future Work}
+
+The available record limits the size and coverage of the modeling dataset.
+Our observations span August 2023 through June 2026, which covers the full range of dates with both
+TEMPO observations and quarterly CEMS data available at the time of study.
+Cloud cover and pixel validity requirements further reduced the number of usable
+five-observation sequences. As the TEMPO and EPA CEMS records grow, more sequences may meet our
+sampling requirements. Beyond North America, GEMS observations could be paired with South Korea's publicly
+released stack \NOx{} measurements, while Sentinel-4 observations could be paired with European generation
+data for large individual units~\cite{yang2024gems,keco2026cleansys,esa2025sentinel4,entsoe2014transparency}.
+These extensions would require new label construction and validation because the available ground data
+differ from EPA CEMS. Improved NO$_2$ retrieval and cloud-correction algorithms may also make changes in
+plume structure more discernible across our raster sequences~\cite{seo2024gemsRetrieval}.
+
+Transport residuals produced the largest gain in our ablation study, but their calculation uses one effective
+wind field, simplified horizontal dispersion, and a fixed decay timescale. A future model could interpolate
+wind vector data based on stack height, account for boundary-layer mixing and plume rise, and model NO$_2$
+chemistry as it varies with sunlight and temperature~\cite{huang2026detectability,meier2024conversion}.
+Better predictions of how existing plumes move and persist could reduce transport-related variation in the
+residuals, making emissions changes easier to detect, especially decreases obscured by lingering NO$_2$.
+
+Our labels aggregate emissions from all facilities within each AOI. When nearby units change activity in
+opposing directions, their signals can partly cancel, leaving little visual evidence of the aggregate label.
+The current model cannot identify which facility drove a predicted change or what caused it. Future work could
+jointly predict the activity label and a per-pixel spatial contribution map to help associate the observed signal
+with specific facilities in an AOI.
 
 \section{Conclusion}
 
-Our results show that sequences of TEMPO observations contain information about
-short-term power plant activity beyond recurring daily and seasonal operating
-patterns. The ConvGRU model improved upon the baseline MLP across most
-evaluations, while the ablation study identified physics-guided transport
-residuals as an important source of predictive information. Together, these
-findings support change detection as a promising way to extract AOI-level
-emissions change signals from noisy satellite observations without requiring
-exact hourly emissions estimates.
-
-This approach does not replace direct emissions measurements or resolve the
-uncertainties involved in attributing observed NO$_2$ columns to individual
-facilities. It could, however, complement existing monitoring systems by
-screening for short-term emissions changes in power plant regions where timely
-facility-level data are unavailable. Additional years of TEMPO observations,
-improved retrievals, and validation across regions and source types will
-determine how broadly the method can support independent emissions monitoring.
+We frame short-term power plant monitoring as a change detection task over sequences of TEMPO NO$_2$ observations rather
+than estimating an exact emission rate from each scan. On more than 22,000 held-out samples covering 116 active U.S. plants,
+the ConvGRU achieved a macro-F1 of 0.56, compared with 0.45 for a baseline using only time-derived features. This gain
+suggests that the raster sequences contain information beyond recurring daily and seasonal patterns, even though retrieval
+uncertainty, changing atmospheric conditions, and nearby sources can obscure individual plumes. Transport residuals compare
+each scan with a prediction of how an existing plume should move and decay, and our ablation study identified them as the
+most important model input. These findings suggest that change detection may be a more tractable framework for modeling
+short-term emissions from noisy satellite observations than direct regression of absolute emissions. This approach
+could support independent monitoring of plant activity during CEMS failures, before quarterly CEMS data are released
+publicly, and at facilities not subject to hourly reporting requirements.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{references}
