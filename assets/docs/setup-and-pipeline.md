@@ -106,7 +106,7 @@ emissions trajectories and exact class counts by split.
 ## 4. Missing-pixel interpolation
 
 Delta training always fills missing NO2 pixels with separable bilinear
-interpolation in the classifier's training-split normalization. Masked-pretraining checkpoints are not used by delta modeling.
+interpolation in the classifier's training-split normalization.
 
 ## 5. Train and evaluate
 
@@ -135,7 +135,6 @@ The launcher requests one A5000 GPU, four CPUs, and two hours on
 | TEMPO observations | `build_tempo_mapping_observations.sh` | `0-31%14`, 4 CPUs, 8 hours |
 | Stratification | `stratify_plants.sh` | 16 CPUs, 30 minutes, high-memory node |
 | Dataset shards | `launch_dataset_generation.sh` | Up to 8 tasks, 8 CPUs each, 12 hours |
-| Masked pretraining | `train_masked_pretraining.sh` | 1 A5000, 4 CPUs, 8 hours |
 | Delta classification | `train_model.sh` | 1 A5000, 4 CPUs, 2 hours |
 | Delta hyperparameter search | `optimize_model.sh` | 1 A5000, 4 CPUs, 8 hours |
 

@@ -1,4 +1,4 @@
-"""Shared configuration for collection, delta modeling, and pretraining."""
+"""Shared configuration for collection and delta modeling."""
 
 import os
 from datetime import date, datetime, timezone
@@ -113,22 +113,6 @@ MODEL_SEASONAL_FEATURES = (
     "day_of_year_sin",
     "day_of_year_cos",
 )
-
-# ============================================================================
-# Masked pretraining
-# ============================================================================
-MASKED_PRETRAINING_BASE_DIR = "/global/scratch/projects/fc_nitrates/ddp/nox/masked_pretraining"
-MASKED_PRETRAINING_VALIDITY_INDEX = os.path.join(MASKED_PRETRAINING_BASE_DIR, "validity-index.parquet")
-MASKED_PRETRAINING_VALIDITY_UPDATES_DIR = os.path.join(MASKED_PRETRAINING_BASE_DIR, "validity-updates")
-MASKED_PRETRAINING_WORK_DIR = os.path.join(MASKED_PRETRAINING_BASE_DIR, "work")
-MASKED_PRETRAINING_SHARD_DIR = os.path.join(MASKED_PRETRAINING_BASE_DIR, "shards")
-MASKED_PRETRAINING_DF_DIR = os.path.join(MASKED_PRETRAINING_BASE_DIR, "dataframes")
-MASKED_PRETRAINING_TRAIN_RECORDS = 500_000
-MASKED_PRETRAINING_VAL_RECORDS = 50_000
-MASKED_PRETRAINING_TEST_RECORDS = 50_000
-MASKED_PRETRAINING_NUM_SHARDS = 8
-MASKED_PRETRAINING_WORKERS_PER_SHARD = 8
-MASKED_PRETRAINING_SPLIT_SEED = 42
 
 # ============================================================================
 # Shared runtime
