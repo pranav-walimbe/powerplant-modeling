@@ -211,7 +211,6 @@ CLAUDE.md
 # Scripts are local by default. Keep only maintained repository and modeling
 # pipeline entrypoints under version control.
 /scripts/*
-!/scripts/clean_workspace.sh
 !/scripts/launch_dataset_generation.sh
 !/scripts/slurm/
 !/scripts/visuals/
@@ -219,17 +218,14 @@ CLAUDE.md
 /scripts/slurm/*
 !/scripts/slurm/build_tempo_mapping_index.sh
 !/scripts/slurm/build_tempo_mapping_observations.sh
-!/scripts/slurm/email_masked_model_results.sh
 !/scripts/slurm/email_model_results.sh
 !/scripts/slurm/generate_dataset.sh
-!/scripts/slurm/generate_masked_pretraining_dataset.sh
 !/scripts/slurm/refresh_campd_emissions.sh
 !/scripts/slurm/scrape_hrrr.sh
 !/scripts/slurm/scrape_locations.sh
 !/scripts/slurm/scrape_tempo_l2_v04.sh
 !/scripts/slurm/stratify_plants.sh
 !/scripts/slurm/submit_tempo_mapping.sh
-!/scripts/slurm/train_masked_pretraining.sh
 !/scripts/slurm/train_model.sh
 
 /src/eda/
@@ -242,3 +238,28 @@ CLAUDE.md
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Paper sources and build artifacts remain local; publish the paper and used figures.
+/assets/paper/*
+!/assets/paper/paper.pdf
+!/assets/paper/visuals/
+/assets/paper/visuals/*
+!/assets/paper/visuals/tempo-regridding.pdf
+!/assets/paper/visuals/label-threshold-samples.pdf
+!/assets/paper/visuals/no2-class-agreement-examples.pdf
+!/assets/paper/visuals/sample-construction.pdf
+!/assets/paper/visuals/convgru-architecture.pdf
+!/assets/paper/visuals/convgru-cell.pdf
+!/assets/paper/visuals/classification-performance-test.pdf
+!/assets/paper/visuals/monthly-sample-composition.pdf
+!/assets/paper/visuals/solar-hour-sample-composition.pdf
+!/assets/paper/visuals/stratified-performance-census-region.pdf
+!/assets/paper/visuals/stratified-performance-change-magnitude.pdf
+
+# Keep only the Savio Slurm skill in the repository.
+/.agents/skills/*
+!/.agents/skills/savio-slurm/
+
+# Keep detailed modeling notes local; publish the setup and pipeline guide.
+/assets/docs/*
+!/assets/docs/setup-and-pipeline.md

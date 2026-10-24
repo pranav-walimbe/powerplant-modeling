@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=scrape_hrrr
-#SBATCH --account=fc_nitrates
+#SBATCH --account=<ACCOUNT>
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
 #SBATCH --nodes=1
@@ -9,16 +9,16 @@
 #SBATCH --time=48:00:00
 #SBATCH --array=0-3%4
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=pranav.walimbe@berkeley.edu
-#SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%A_%a.log
-#SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%A_%a.err
+#SBATCH --mail-user=<EMAIL>
+#SBATCH --output=/global/home/users/<USER>/no2-modeling/logs/%x-%A_%a.log
+#SBATCH --error=/global/home/users/<USER>/no2-modeling/logs/%x-%A_%a.err
 
 set -euo pipefail
 
-cd "/global/home/users/pranavwalimbe/no2-modeling"
+cd "/global/home/users/<USER>/no2-modeling"
 module load python/3.11.6-gcc-11.4.0
 source .venv/bin/activate
-export PYTHONPATH="/global/home/users/pranavwalimbe/no2-modeling/src:/global/home/users/pranavwalimbe/no2-modeling/src/delta-model"
+export PYTHONPATH="/global/home/users/<USER>/no2-modeling/src:/global/home/users/<USER>/no2-modeling/src/delta-model"
 
 START_DATES=(2023-08-01 2024-05-09 2025-02-15 2025-11-24)
 END_DATES=(2024-05-08 2025-02-14 2025-11-23 2026-09-10)

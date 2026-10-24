@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=stratify-plants
-#SBATCH --account=fc_nitrates
+#SBATCH --account=<ACCOUNT>
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
 #SBATCH --nodes=1
@@ -8,23 +8,23 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=00:30:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=pranav.walimbe@berkeley.edu
-#SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.log
-#SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.err
+#SBATCH --mail-user=<EMAIL>
+#SBATCH --output=/global/home/users/<USER>/no2-modeling/logs/%x-%j.log
+#SBATCH --error=/global/home/users/<USER>/no2-modeling/logs/%x-%j.err
 
 set -euo pipefail
 
-repo_dir="${NO2_REPOSITORY_DIR:-/global/home/users/pranavwalimbe/no2-modeling}"
-strat_dir="/global/scratch/projects/fc_nitrates/ddp/nox/nox_powerplant_data"
-recipient="pranav.walimbe@berkeley.edu"
+repo_dir="${NO2_REPOSITORY_DIR:-/global/home/users/<USER>/no2-modeling}"
+strat_dir="/global/scratch/projects/<ACCOUNT>/ddp/nox/nox_powerplant_data"
+recipient="<EMAIL>"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
 mail_log="/var/log/maillog"
-diagnostic="/global/home/users/pranavwalimbe/vis/stratification-window-behavior-${SLURM_JOB_ID}.png"
-monthly_prevalence="/global/home/users/pranavwalimbe/vis/stratification-monthly-prevalence-${SLURM_JOB_ID}.png"
-solar_hour_prevalence="/global/home/users/pranavwalimbe/vis/stratification-solar-hour-prevalence-${SLURM_JOB_ID}.png"
-aoi_characteristics_plot="/global/home/users/pranavwalimbe/vis/stratification-aoi-characteristics-${SLURM_JOB_ID}.png"
-aoi_characteristics_table="/global/home/users/pranavwalimbe/vis/stratification-aoi-characteristics-${SLURM_JOB_ID}.csv"
-aoi_selection_table="/global/home/users/pranavwalimbe/vis/stratification-aoi-selection-${SLURM_JOB_ID}.csv"
+diagnostic="/global/home/users/<USER>/vis/stratification-window-behavior-${SLURM_JOB_ID}.png"
+monthly_prevalence="/global/home/users/<USER>/vis/stratification-monthly-prevalence-${SLURM_JOB_ID}.png"
+solar_hour_prevalence="/global/home/users/<USER>/vis/stratification-solar-hour-prevalence-${SLURM_JOB_ID}.png"
+aoi_characteristics_plot="/global/home/users/<USER>/vis/stratification-aoi-characteristics-${SLURM_JOB_ID}.png"
+aoi_characteristics_table="/global/home/users/<USER>/vis/stratification-aoi-characteristics-${SLURM_JOB_ID}.csv"
+aoi_selection_table="/global/home/users/<USER>/vis/stratification-aoi-selection-${SLURM_JOB_ID}.csv"
 
 cd "${repo_dir}"
 module load python/3.11.6-gcc-11.4.0

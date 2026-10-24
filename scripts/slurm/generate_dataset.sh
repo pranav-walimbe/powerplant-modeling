@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=generate-dataset
-#SBATCH --account=fc_nitrates
+#SBATCH --account=<ACCOUNT>
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
 #SBATCH --nodes=1
@@ -8,16 +8,16 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=12:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=pranav.walimbe@berkeley.edu
-#SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%A_%a.log
-#SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%A_%a.err
+#SBATCH --mail-user=<EMAIL>
+#SBATCH --output=/global/home/users/<USER>/no2-modeling/logs/%x-%A_%a.log
+#SBATCH --error=/global/home/users/<USER>/no2-modeling/logs/%x-%A_%a.err
 
 set -euo pipefail
 
-cd "/global/home/users/pranavwalimbe/no2-modeling"
+cd "/global/home/users/<USER>/no2-modeling"
 module load python/3.11.6-gcc-11.4.0
 source .venv/bin/activate
-export PYTHONPATH="/global/home/users/pranavwalimbe/no2-modeling/src:/global/home/users/pranavwalimbe/no2-modeling/src/delta-model"
+export PYTHONPATH="/global/home/users/<USER>/no2-modeling/src:/global/home/users/<USER>/no2-modeling/src/delta-model"
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -30,11 +30,11 @@ export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK}"
 srun python -u -m preprocessing.generate_dataset "$@"
 
 if [[ "${DATASET_GENERATION_STAGE:-generate}" == "finalize" ]]; then
-    recipient="pranav.walimbe@berkeley.edu"
+    recipient="<EMAIL>"
     mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
     mail_log="/var/log/maillog"
     result_job_id="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID}}"
-    diagnostic="/global/home/users/pranavwalimbe/vis/dataset-window-behavior-${result_job_id}.png"
+    diagnostic="/global/home/users/<USER>/vis/dataset-window-behavior-${result_job_id}.png"
 
     if [[ ! -s "${diagnostic}" ]]; then
         echo "Expected post-filter diagnostic was not created: ${diagnostic}" >&2

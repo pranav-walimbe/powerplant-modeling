@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-cd "/global/home/users/pranavwalimbe/no2-modeling"
+cd "/global/home/users/<USER>/no2-modeling"
 mkdir -p logs
 
 index_job_id="$(sbatch --parsable scripts/slurm/build_tempo_mapping_index.sh "$@")"
