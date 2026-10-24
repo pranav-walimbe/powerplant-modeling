@@ -68,8 +68,7 @@ to the same geographic split. The assignment first fixes the 70% training
 allocation by AOIs and raw records, then balances AOI, record, and class counts
 between validation and test. Training is balanced to its smallest class.
 Validation and test keep every increase and decrease record, then use fixed-seed
-uniform steady samples to match their larger change class. See
-[dataset_design.md](dataset_design.md).
+uniform steady samples to match their larger change class.
 
 ## 3. Generate raster records
 
@@ -102,16 +101,12 @@ changes. Do not regenerate while a model job reads the dataset.
 Workers require at least 85% finite NO2 coverage at each timestep. The
 finalizer publishes split CSVs only after it validates all shard outcomes. It
 does not rebalance after raster filtering, and emails a plot of the surviving
-emissions trajectories and exact class counts by split. See
-[regridding.md](regridding.md).
+emissions trajectories and exact class counts by split.
 
 ## 4. Missing-pixel interpolation
 
 Delta training always fills missing NO2 pixels with separable bilinear
-interpolation in the classifier's training-split normalization. The standalone
-masked-pretraining workflow remains available in
-[masked-pretraining/setup-and-pipeline.md](../masked-pretraining/setup-and-pipeline.md),
-but its checkpoints are not used by delta modeling.
+interpolation in the classifier's training-split normalization. Masked-pretraining checkpoints are not used by delta modeling.
 
 ## 5. Train and evaluate
 
@@ -130,8 +125,7 @@ memory-mapped arrays, and trains two classifiers:
   classification.
 
 The launcher requests one A5000 GPU, four CPUs, and two hours on
-`savio4_gpu` with `a5k_gpu4_normal`. See [modeling.md](modeling.md) for the
-model contract and validation-only hyperparameter search.
+`savio4_gpu` with `a5k_gpu4_normal`.
 
 ## Current Savio launchers
 
