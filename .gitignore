@@ -242,3 +242,24 @@ CLAUDE.md
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Paper sources and build artifacts remain local; publish the paper and used figures.
+/assets/paper/*
+!/assets/paper/paper.pdf
+!/assets/paper/visuals/
+/assets/paper/visuals/*
+!/assets/paper/visuals/tempo-regridding.pdf
+!/assets/paper/visuals/label-threshold-samples.pdf
+!/assets/paper/visuals/no2-class-agreement-examples.pdf
+!/assets/paper/visuals/sample-construction.pdf
+!/assets/paper/visuals/convgru-architecture.pdf
+!/assets/paper/visuals/convgru-cell.pdf
+!/assets/paper/visuals/classification-performance-test.pdf
+!/assets/paper/visuals/monthly-sample-composition.pdf
+!/assets/paper/visuals/solar-hour-sample-composition.pdf
+!/assets/paper/visuals/stratified-performance-census-region.pdf
+!/assets/paper/visuals/stratified-performance-change-magnitude.pdf
+
+# Keep only the Savio Slurm skill in the repository.
+/.agents/skills/*
+!/.agents/skills/savio-slurm/
