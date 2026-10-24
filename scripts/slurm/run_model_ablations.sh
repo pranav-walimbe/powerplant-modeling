@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=ablate-no2-model
-#SBATCH --account=fc_nitrates
+#SBATCH --account=<ACCOUNT>
 #SBATCH --partition=savio4_gpu
 #SBATCH --qos=a5k_gpu4_normal
 #SBATCH --nodes=1
@@ -10,21 +10,21 @@
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=<EMAIL>
-#SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.log
-#SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.err
+#SBATCH --output=/global/home/users/<USER>/no2-modeling/logs/%x-%j.log
+#SBATCH --error=/global/home/users/<USER>/no2-modeling/logs/%x-%j.err
 
 set -euo pipefail
 
-cd "/global/home/users/pranavwalimbe/no2-modeling"
+cd "/global/home/users/<USER>/no2-modeling"
 module load python/3.11.6-gcc-11.4.0
 source .venv/bin/activate
-export PYTHONPATH="/global/home/users/pranavwalimbe/no2-modeling/src:/global/home/users/pranavwalimbe/no2-modeling/src/delta-model"
+export PYTHONPATH="/global/home/users/<USER>/no2-modeling/src:/global/home/users/<USER>/no2-modeling/src/delta-model"
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-shared_dataset_dir="/global/scratch/projects/fc_nitrates/ddp/nox/dataset"
+shared_dataset_dir="/global/scratch/projects/<ACCOUNT>/ddp/nox/dataset"
 node_work_dir="/tmp/no2-model-ablation-${SLURM_JOB_ID:?SLURM_JOB_ID is not set}"
 node_dataframe_dir="${node_work_dir}/dataframes"
 mkdir -p "${node_work_dir}"
@@ -47,8 +47,8 @@ fi
 export NO2_DATASET_DF="${node_dataframe_dir}"
 df -h "${node_work_dir}"
 
-mkdir -p "/global/home/users/pranavwalimbe/.cache"
-ablation_output=$(mktemp "/global/home/users/pranavwalimbe/.cache/ablate-no2-${SLURM_JOB_ID}.XXXXXX.log")
+mkdir -p "/global/home/users/<USER>/.cache"
+ablation_output=$(mktemp "/global/home/users/<USER>/.cache/ablate-no2-${SLURM_JOB_ID}.XXXXXX.log")
 trap 'rm -f -- "${ablation_output}"' EXIT
 recipient="<EMAIL>"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"

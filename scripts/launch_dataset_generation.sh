@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-repo_dir="/global/home/users/pranavwalimbe/no2-modeling"
+repo_dir="/global/home/users/<USER>/no2-modeling"
 shard_size=16000
 batch_size=""
 afterok_job_id=""

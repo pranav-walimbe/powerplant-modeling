@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=tempo_l2_v04
-#SBATCH --account=fc_nitrates
+#SBATCH --account=<ACCOUNT>
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
 #SBATCH --nodes=1
@@ -9,15 +9,15 @@
 #SBATCH --time=72:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=<EMAIL>
-#SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.log
-#SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.err
+#SBATCH --output=/global/home/users/<USER>/no2-modeling/logs/%x-%j.log
+#SBATCH --error=/global/home/users/<USER>/no2-modeling/logs/%x-%j.err
 
 set -euo pipefail
 
-cd "/global/home/users/pranavwalimbe/no2-modeling"
+cd "/global/home/users/<USER>/no2-modeling"
 module load python/3.11.6-gcc-11.4.0
 source .venv/bin/activate
-export PYTHONPATH="/global/home/users/pranavwalimbe/no2-modeling/src:/global/home/users/pranavwalimbe/no2-modeling/src/delta-model"
+export PYTHONPATH="/global/home/users/<USER>/no2-modeling/src:/global/home/users/<USER>/no2-modeling/src/delta-model"
 
 python -c 'from config import TEMPO_LEVEL, TEMPO_VERSION
 if (TEMPO_LEVEL, TEMPO_VERSION) != ("L2", "V04"):

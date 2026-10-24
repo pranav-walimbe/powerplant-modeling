@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=aoi-normalization
-#SBATCH --account=fc_nitrates
+#SBATCH --account=<ACCOUNT>
 #SBATCH --partition=savio4_htc
 #SBATCH --qos=savio_normal
 #SBATCH --constraint=savio4_m512
@@ -10,24 +10,24 @@
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=<EMAIL>
-#SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.log
-#SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.err
+#SBATCH --output=/global/home/users/<USER>/no2-modeling/logs/%x-%j.log
+#SBATCH --error=/global/home/users/<USER>/no2-modeling/logs/%x-%j.err
 
 set -euo pipefail
 
-repo_dir="/global/home/users/pranavwalimbe/no2-modeling"
+repo_dir="/global/home/users/<USER>/no2-modeling"
 recipient="<EMAIL>"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
 mail_log="/var/log/maillog"
-output="/global/scratch/projects/fc_nitrates/ddp/nox/dataset/aoi-no2-normalization.json"
-plot="/global/home/users/pranavwalimbe/vis/aoi-no2-normalization-${SLURM_JOB_ID}.png"
+output="/global/scratch/projects/<ACCOUNT>/ddp/nox/dataset/aoi-no2-normalization.json"
+plot="/global/home/users/<USER>/vis/aoi-no2-normalization-${SLURM_JOB_ID}.png"
 
 cd "${repo_dir}"
 module load python/3.11.6-gcc-11.4.0
 source .venv/bin/activate
 export PYTHONPATH="${repo_dir}/src:${repo_dir}/src/delta-model"
 export MPLBACKEND=Agg
-export MPLCONFIGDIR="/global/home/users/pranavwalimbe/.cache/matplotlib"
+export MPLCONFIGDIR="/global/home/users/<USER>/.cache/matplotlib"
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
