@@ -9,7 +9,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --array=0-3%4
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=pranav.walimbe@berkeley.edu
+#SBATCH --mail-user=<EMAIL>
 #SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%A_%a.log
 #SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%A_%a.err
 

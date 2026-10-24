@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:A5000:1
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=pranav.walimbe@berkeley.edu
+#SBATCH --mail-user=<EMAIL>
 #SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.log
 #SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.err
 
@@ -50,7 +50,7 @@ df -h "${node_work_dir}"
 mkdir -p "/global/home/users/pranavwalimbe/.cache"
 ablation_output=$(mktemp "/global/home/users/pranavwalimbe/.cache/ablate-no2-${SLURM_JOB_ID}.XXXXXX.log")
 trap 'rm -f -- "${ablation_output}"' EXIT
-recipient="pranav.walimbe@berkeley.edu"
+recipient="<EMAIL>"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
 mail_log="/var/log/maillog"
 

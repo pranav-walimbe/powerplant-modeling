@@ -10,13 +10,12 @@ CODEX_SEED ?= $(HOME)/.codex_seed
 CODEX_SHARED := packages plugins skills sessions cache
 CODEX_MIRRORED := auth.json config.toml installation_id
 
-.PHONY: help setup check clean fix-codex
+.PHONY: help setup check fix-codex
 
 help:
 	@echo "Available targets:"
 	@echo "  setup    Sync the locked environment with uv"
 	@echo "  check    Run Ruff and compile Python sources"
-	@echo "  clean    Clear regenerable caches without modifying model runs"
 	@echo "  fix-codex Move Codex SQLite state off NFS and clear stale locks"
 
 setup:
@@ -25,9 +24,6 @@ setup:
 check:
 	$(UV_PROJECT) run --locked ruff check src
 	$(UV_PROJECT) run --locked python -m compileall -q src
-
-clean:
-	bash scripts/clean_workspace.sh
 
 fix-codex:
 	@set -e; \

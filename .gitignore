@@ -211,7 +211,6 @@ CLAUDE.md
 # Scripts are local by default. Keep only maintained repository and modeling
 # pipeline entrypoints under version control.
 /scripts/*
-!/scripts/clean_workspace.sh
 !/scripts/launch_dataset_generation.sh
 !/scripts/slurm/
 !/scripts/visuals/

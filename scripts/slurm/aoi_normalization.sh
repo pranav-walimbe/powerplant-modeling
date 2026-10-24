@@ -9,14 +9,14 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=pranav.walimbe@berkeley.edu
+#SBATCH --mail-user=<EMAIL>
 #SBATCH --output=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.log
 #SBATCH --error=/global/home/users/pranavwalimbe/no2-modeling/logs/%x-%j.err
 
 set -euo pipefail
 
 repo_dir="/global/home/users/pranavwalimbe/no2-modeling"
-recipient="pranav.walimbe@berkeley.edu"
+recipient="<EMAIL>"
 mail_host="${SLURM_SUBMIT_HOST:-ln002.brc}"
 mail_log="/var/log/maillog"
 output="/global/scratch/projects/fc_nitrates/ddp/nox/dataset/aoi-no2-normalization.json"
