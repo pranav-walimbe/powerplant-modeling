@@ -52,6 +52,7 @@ def _plot_grouped_bars(
     values: np.ndarray,
     split_names: tuple[str, ...],
     *,
+    adjacent_model_bars: bool = False,
     show_split_names: bool = True,
 ) -> None:
     category_count = len(category_names)
@@ -60,13 +61,14 @@ def _plot_grouped_bars(
     positions = np.concatenate(
         [split_start + np.arange(category_count) for split_start in split_starts]
     )
-    bar_width = 0.30
-    model_offset = 0.25
+    bar_width = 0.34 if adjacent_model_bars else 0.30
+    model_offset = bar_width / 2 if adjacent_model_bars else 0.25
+    model_offsets = (-model_offset, model_offset)
+    model_hatches = (None, None) if adjacent_model_bars else MODEL_HATCHES
 
-    for model_index, (model_name, color, hatch) in enumerate(
-        zip(MODEL_NAMES, MODEL_COLORS, MODEL_HATCHES, strict=True)
+    for model_index, (model_name, color, hatch, offset) in enumerate(
+        zip(MODEL_NAMES, MODEL_COLORS, model_hatches, model_offsets, strict=True)
     ):
-        offset = -model_offset if model_index == 0 else model_offset
         bars = axis.bar(
             positions + offset,
             values[model_index].reshape(-1),
@@ -156,6 +158,7 @@ def _save_test_figure() -> None:
             category_names,
             values,
             (SPLIT_NAMES[test_index],),
+            adjacent_model_bars=True,
             show_split_names=False,
         )
         axis.set_title(title, pad=7)
