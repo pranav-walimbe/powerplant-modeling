@@ -262,4 +262,4 @@ __marimo__/
 
 # Keep detailed modeling notes local; publish the setup and pipeline guide.
 /assets/docs/*
-!/assets/docs/setup-and-pipeline.md
+!/assets/docs/setup_and_pipeline.md
