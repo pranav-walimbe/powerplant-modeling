@@ -13,7 +13,7 @@ plt.switch_backend("Agg")
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_STEM = REPOSITORY_ROOT / "assets" / "paper" / "visuals" / "solar-hour-sample-composition"
-RUN_DIR = Path("/global/home/users/pranavwalimbe/model_runs/classification_only_zscore_20261007_202105")
+RUN_DIR = Path("/global/home/users/<USER>/model_runs/classification_only_zscore_20261007_202105")
 
 MODEL_NAMES = ("Baseline MLP", "ConvGRU")
 MODEL_FILES = ("seasonal_test_predictions.csv", "test_predictions.csv")
