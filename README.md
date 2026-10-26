@@ -25,7 +25,7 @@ Official implementation of [Detecting Changes in Power Plant NOx Emissions Using
   </a>
 </p>
 
-*Example decrease-labeled sequence from an AOI centered on the Hugh L. Spurlock Generating Station in Maysville, Kentucky, on February 26, 2025. Panels show five NO2 observations, wind and temperature rasters, four transport residuals, and temporal features.*
+Example decrease-labeled sequence from an AOI centered on the Hugh L. Spurlock Generating Station in Maysville, Kentucky, on February 26, 2025. Panels show five NO2 observations, wind and temperature rasters, four transport residuals, and temporal features.
 
 ## Model Architecture
 
@@ -35,7 +35,7 @@ Official implementation of [Detecting Changes in Power Plant NOx Emissions Using
   </a>
 </p>
 
-*ConvGRU architecture. Separate convolutional encoders process observation rasters and transport residuals across five timesteps. The final hidden state is fused with temporal features to classify the emissions trajectory as increasing, steady, or decreasing.*
+ConvGRU architecture. Separate convolutional encoders process observation rasters and transport residuals across five timesteps. The final hidden state is fused with temporal features to classify the emissions trajectory as increasing, steady, or decreasing.
 
 ## Results
 
@@ -45,7 +45,7 @@ Official implementation of [Detecting Changes in Power Plant NOx Emissions Using
   </a>
 </p>
 
-*Test performance on 22K+ sequences covering 116 active U.S. power plants. The baseline MLP uses only the four temporal features described above. Panels show per-class F1, per-class recall, and macro-F1.*
+Test performance on 22K+ sequences covering 116 active U.S. power plants. The baseline MLP uses only the four temporal features described above. Panels show per-class F1, per-class recall, and macro-F1.
 
 ## Setup + Usage
 
