@@ -57,8 +57,7 @@ Set fixed dates for a reproducible pull.
 
 ```bash
 uv run python -u src/data-scraping/scrape_tempo.py
-uv run python -u src/data-scraping/scrape_hrrr.py \
-    --start-date 2023-08-01 --end-date 2026-06-30 --workers 4
+uv run python -u src/data-scraping/scrape_hrrr.py --workers 4
 uv run python -u src/data-scraping/scrape_emissions.py
 uv run python -u src/data-scraping/scrape_locations.py
 ```
@@ -66,7 +65,7 @@ uv run python -u src/data-scraping/scrape_locations.py
 | Entry point | Parameters to supply |
 |---|---|
 | `scrape_tempo.py` | Config: `TEMPO_START_DATE`, `TEMPO_END_DATE`, `TEMPO_LEVEL`, `TEMPO_VERSION`, `TEMPO_BASE_DIR` |
-| `scrape_hrrr.py` | CLI: `--start-date`, `--end-date` (`YYYY-MM-DD`), `--output-dir`, `--workers`, `--overwrite`; dates/output default to config |
+| `scrape_hrrr.py` | Config: `HRRR_START_DATE`, `HRRR_END_DATE`, `HRRR_DIR`; optional CLI overrides: `--start-date`, `--end-date` (`YYYY-MM-DD`), `--output-dir`. Runtime: `--workers`, `--overwrite` |
 | `scrape_emissions.py` | Config: `EMISSIONS_START_DATE`, `EMISSIONS_END_DATE`, `EMISSIONS_BASE_DIR` |
 | `scrape_locations.py` | Config: `EMISSIONS_RECORDS_PARQUET` input, `FULL_DATA_PARQUET` output |
 
