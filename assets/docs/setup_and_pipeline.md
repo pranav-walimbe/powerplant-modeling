@@ -180,8 +180,8 @@ validation, and test splits after checkpoint selection by validation macro F1.
 | `DATASET_DIR`, `DATASET_DF` | Configured source rasters and split metadata |
 | `RUNS_DIR` | Parent directory for timestamped run outputs |
 
-Normalization and NO2 interpolation run automatically; no separate
-AOI-normalization command is needed.
+Training computes normalization statistics from the training split and performs
+NO2 interpolation automatically.
 
 ### Training parameters
 

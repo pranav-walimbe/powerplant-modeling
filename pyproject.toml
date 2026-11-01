@@ -9,7 +9,6 @@ description = "Estimate power-plant NOx emissions from TEMPO satellite imagery"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "cdsapi",
     "earthaccess",
     "eccodes>=2.48.0",
     "eccodeslib>=2.48.0.26",
