@@ -239,8 +239,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Paper sources and build artifacts remain local; publish the paper and used figures.
+# Track the paper source and published artifacts; keep other build files local.
 /assets/paper/*
+!/assets/paper/paper.tex
 !/assets/paper/paper.pdf
 !/assets/paper/visuals/
 /assets/paper/visuals/*
