@@ -59,15 +59,6 @@ TEST_RECORDS_CSV = os.path.join(STRAT_BASE_DIR, "test_records.csv")  # test spli
 VIS_DIR = "/global/home/users/pranavwalimbe/vis"  # output directory for visualizations
 
 # ============================================================================
-# ERA5 wind data scraping
-# ============================================================================
-ERA5_DIR = "/global/scratch/projects/fc_nitrates/ddp/nox/era5"  # output directory for ERA5 wind reanalysis
-WIND_START_MONTH = 8  # ERA5 download start month
-WIND_START_YEAR = 2023  # ERA5 download start year
-WIND_END_MONTH = 12  # ERA5 download end month
-WIND_END_YEAR = 2025  # ERA5 download end year
-
-# ============================================================================
 # HRRR data scraping
 # ============================================================================
 HRRR_DIR = "/global/scratch/projects/fc_nitrates/ddp/nox/HRRR"
@@ -88,7 +79,6 @@ DATASET_DF = os.getenv(  # saved tabular features and targets
 )
 DATASET_TEMPO_CACHE_DIR = os.path.join(DATASET_DIR, "tempo-cache")  # persistent AOI-scan regridding cache
 DATASET_WEATHER_CACHE_DIR = os.path.join(DATASET_DIR, "weather-cache")  # persistent aligned AOI-hour weather rasters
-DATASET_AOI_NORMALIZATION_STATS = os.path.join(DATASET_DIR, "aoi-no2-normalization.json")
 DATASET_MAX_PARALLEL_SHARDS = 8  # maximum concurrently running Slurm shard tasks
 DATASET_WORKERS_PER_SHARD = 8  # process workers and CPUs assigned to each shard task
 IMG_SIZE = 24  # image size in pixels (24x24)

@@ -1,7 +1,5 @@
 """Command-specific prerequisite validation."""
 
-from pathlib import Path
-
 from config import (
     CAMPD_API_KEY,
     EARTHDATA_PASSWORD,
@@ -20,11 +18,3 @@ def require_earthdata_credentials() -> None:
     """Validate credentials used by earthaccess's environment strategy."""
     if not EARTHDATA_USERNAME or not EARTHDATA_PASSWORD:
         raise RuntimeError("EARTHDATA_USERNAME and EARTHDATA_PASSWORD must be set in the repository .env file")
-
-
-def require_cds_credentials(path: Path | None = None) -> Path:
-    """Return the CDS configuration path or raise a useful error."""
-    config_path = path or Path.home() / ".cdsapirc"
-    if not config_path.is_file():
-        raise RuntimeError(f"{config_path} not found; configure CDS API credentials first")
-    return config_path
