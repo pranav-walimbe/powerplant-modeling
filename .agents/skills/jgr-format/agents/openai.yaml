@@ -1,0 +1,3 @@
+interface:
+  display_name: "JGR Format"
+  short_description: "Prepare AGU JGR-ML research article submissions"

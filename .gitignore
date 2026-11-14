@@ -256,9 +256,10 @@ __marimo__/
 !/assets/paper/visuals/stratified-performance-census-region.pdf
 !/assets/paper/visuals/stratified-performance-change-magnitude.pdf
 
-# Keep only the Savio Slurm skill in the repository.
+# Keep the Savio Slurm and JGR formatting skills in the repository.
 /.agents/skills/*
 !/.agents/skills/savio-slurm/
+!/.agents/skills/jgr-format/
 
 # Keep detailed modeling notes local; publish the setup and pipeline guide.
 /assets/docs/*
