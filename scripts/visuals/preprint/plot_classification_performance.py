@@ -6,8 +6,8 @@ import numpy as np
 plt.switch_backend("Agg")
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals" / "preprint"
 OUTPUT_STEM = OUTPUT_DIR / "classification-performance"
 TEST_OUTPUT_STEM = OUTPUT_DIR / "classification-performance-test"
 

@@ -14,8 +14,8 @@ from config import FULL_DATA_PARQUET, MODEL_CLASS_NAMES
 plt.switch_backend("Agg")
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals" / "preprint"
 OUTPUT_STEMS = (
     OUTPUT_DIR / "stratified-performance-monthly",
     OUTPUT_DIR / "stratified-performance-solar-hour",

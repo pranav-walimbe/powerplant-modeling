@@ -20,8 +20,8 @@ Official implementation of [Detecting Changes in Power Plant NOx Emissions Using
 ## Example Sequence
 
 <p align="center">
-  <a href="assets/paper/visuals/sample-construction.pdf">
-    <img src="assets/readme/sample-construction.png" width="1000" alt="Decrease-labeled five-observation sequence showing TEMPO NO2, wind, temperature, transport residuals, and temporal features.">
+  <a href="assets/paper/visuals/preprint/sample-construction.pdf">
+    <img src="assets/visuals/readme/sample-construction.png" width="1000" alt="Decrease-labeled five-observation sequence showing TEMPO NO2, wind, temperature, transport residuals, and temporal features.">
   </a>
 </p>
 
@@ -30,8 +30,8 @@ Example decrease-labeled sequence from an AOI centered on the Hugh L. Spurlock G
 ## Model Architecture
 
 <p align="center">
-  <a href="assets/paper/visuals/convgru-architecture.pdf">
-    <img src="assets/readme/convgru-architecture.png" width="1000" alt="ConvGRU architecture with separate observation and transport-residual encoders, recurrent updates, spatial pooling, and fusion with temporal features.">
+  <a href="assets/paper/visuals/preprint/convgru-architecture.pdf">
+    <img src="assets/visuals/readme/convgru-architecture.png" width="1000" alt="ConvGRU architecture with separate observation and transport-residual encoders, recurrent updates, spatial pooling, and fusion with temporal features.">
   </a>
 </p>
 
@@ -40,8 +40,8 @@ ConvGRU architecture. Separate convolutional encoders process observation raster
 ## Results
 
 <p align="center">
-  <a href="assets/paper/visuals/classification-performance-test.pdf">
-    <img src="assets/readme/classification-performance-test.png" width="1000" alt="Test-set per-class F1, recall, and macro-F1 comparing the time-only baseline MLP with ConvGRU.">
+  <a href="assets/paper/visuals/preprint/classification-performance-test.pdf">
+    <img src="assets/visuals/readme/classification-performance-test.png" width="1000" alt="Test-set per-class F1, recall, and macro-F1 comparing the time-only baseline MLP with ConvGRU.">
   </a>
 </p>
 
@@ -68,8 +68,9 @@ See the [setup and pipeline guide](assets/docs/setup_and_pipeline.md)
     ├── docs/                        # Setup guide
     ├── paper/
     │   ├── paper.pdf
-    │   └── visuals/                 # Visuals for preprint
-    └── readme/                      # Visuals for readme
+    │   └── visuals/                 # Preprint and JGR visuals
+    └── visuals/
+        └── readme/                  # Visuals embedded in this README
 ```
 
 ## Citation

@@ -1,4 +1,4 @@
-"""Generate the complete training-input sequence used as paper Figure 2."""
+"""Shared data preparation and rendering for sample-construction figures."""
 
 from __future__ import annotations
 
@@ -18,17 +18,13 @@ from config import MODEL_CLASS_NAMES, MODEL_IMAGE_KEYS, RUNS_DIR
 plt.switch_backend("Agg")
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
-OUTPUT_STEM = OUTPUT_DIR / "sample-construction"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 RUN_DIR = Path(RUNS_DIR) / "classification_only_zscore_20261007_202105"
 
 EXAMPLE_TRAIN_INDEX = 27_621
 EXAMPLE_AOI_ID = 6_041
 NO2_DISPLAY_SCALE = 1.0e15
 WIND_ARROW_STEP = 4
-FIGURE_WIDTH = 7.15
-FIGURE_HEIGHT = 2.32
 
 
 def _load_json(path: Path) -> dict[str, object]:
@@ -283,14 +279,25 @@ def _plot_residual_sequence(
     )
 
 
-def _add_sample_target(figure: plt.Figure, label: str, nox_delta: float) -> None:
+def _add_sample_target(
+    figure: plt.Figure,
+    label: str,
+    nox_delta: float,
+    *,
+    value_scale: float,
+    units: str,
+    decimals: int,
+) -> None:
     # Place the target and its determining change in the figure header
     header_axis = figure.add_axes((0.0, 0.895, 1.0, 0.090), zorder=20)
     header_axis.set_axis_off()
     header_axis.text(
         0.500,
         0.50,
-        f"Behavior Class: {label.capitalize()} ($\\Delta$NO$_x$: {nox_delta:+.1f} lb/hr)",
+        (
+            f"Behavior Class: {label.capitalize()} "
+            f"($\\Delta$NO$_x$: {nox_delta * value_scale:+.{decimals}f} {units})"
+        ),
         ha="center",
         va="center",
         fontsize=8.0,
@@ -324,8 +331,15 @@ def _plot_temporal_features(figure: plt.Figure) -> None:
         axis.text(0.50, position, feature_label, ha="center", va="center", fontsize=5.8)
 
 
-def main() -> None:
-    """Generate PDF and PNG versions of the complete sample figure."""
+def generate(
+    output_stem: Path,
+    *,
+    figure_size: tuple[float, float],
+    nox_delta_scale: float,
+    nox_delta_units: str,
+    nox_delta_decimals: int,
+) -> None:
+    """Generate PDF and PNG versions with a supplied paper layout and unit scale."""
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -341,7 +355,7 @@ def main() -> None:
     wind_u = physical[:, MODEL_IMAGE_KEYS.index("wind_u_80m_mps")]
     wind_v = physical[:, MODEL_IMAGE_KEYS.index("wind_v_80m_mps")]
 
-    figure = plt.figure(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT))
+    figure = plt.figure(figsize=figure_size)
     layout = figure.add_gridspec(
         2,
         2,
@@ -373,13 +387,17 @@ def main() -> None:
     )
     _plot_residual_sequence(figure, layout[1, 1], residuals)
     _plot_temporal_features(figure)
-    _add_sample_target(figure, label, nox_delta)
+    _add_sample_target(
+        figure,
+        label,
+        nox_delta,
+        value_scale=nox_delta_scale,
+        units=nox_delta_units,
+        decimals=nox_delta_decimals,
+    )
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    figure.savefig(OUTPUT_STEM.with_suffix(".pdf"))
-    figure.savefig(OUTPUT_STEM.with_suffix(".png"), dpi=450)
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_stem.with_suffix(".pdf"))
+    figure.savefig(output_stem.with_suffix(".png"), dpi=450)
     plt.close(figure)
 
-
-if __name__ == "__main__":
-    main()

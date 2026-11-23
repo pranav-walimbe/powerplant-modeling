@@ -1,5 +1,6 @@
-"""Generate the real TEMPO footprint-to-grid transformation used as paper Figure 1."""
+"""Shared data loading and rendering for TEMPO regridding figures."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -21,15 +22,42 @@ from config import IMG_RANGE, MIN_PIXEL_CLOUD, TEMPO_DIR
 
 plt.switch_backend("Agg")
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
-OUTPUT_STEM = OUTPUT_DIR / "tempo-regridding"
-
 EXAMPLE_AOI_ID = 9
 EXAMPLE_LONGITUDE = -106.375
 EXAMPLE_LATITUDE = 31.7569
 EXAMPLE_GRANULE = Path("2023/08/TEMPO_NO2_L2_V04_20230804T160722Z_S004G08.nc")
 NO2_SCALE = 1.0e15
+
+
+@dataclass(frozen=True)
+class RegriddingLayout:
+    """Paper-specific layout values for the shared regridding renderer."""
+
+    figure_size: tuple[float, float]
+    width_ratios: tuple[float, float, float]
+    height_ratios: tuple[float, ...]
+    colorbar_row: int
+    colorbar_width_ratios: tuple[float, float, float]
+    horizontal_space: float
+    vertical_space: float
+    native_title: str
+    grid_title: str
+    title_pad: float
+    process_text_y: float
+    arrow_start_x: float
+    arrow_end_x: float
+    arrow_y: float
+    arrow_linewidth: float
+    arrow_mutation_scale: float
+    colorbar_font_size: float
+    colorbar_label_pad: float
+    colorbar_tick_font_size: float
+    colorbar_tick_length: float
+    colorbar_tick_pad: float
+    left: float
+    right: float
+    top: float
+    bottom: float
 
 
 def _load_example() -> tuple[AoiGrid, GranulePixels, np.ndarray]:
@@ -75,14 +103,14 @@ def _format_map_axis(axis: plt.Axes) -> None:
     axis.spines[["top", "right"]].set_visible(False)
 
 
-def main() -> None:
-    """Generate PDF and PNG versions of the real-data regridding figure."""
+def generate(output_stem: Path, layout: RegriddingLayout) -> None:
+    """Generate PDF and PNG regridding figures with a supplied paper layout."""
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
-            "font.size": 7,
-            "axes.labelsize": 7,
-            "axes.titlesize": 8,
+            "font.size": 7.0,
+            "axes.labelsize": 7.0,
+            "axes.titlesize": 8.0,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -96,19 +124,23 @@ def main() -> None:
     )
     color_map = plt.colormaps["viridis"]
 
-    figure = plt.figure(figsize=(6.0, 2.90))
-    layout = figure.add_gridspec(
+    figure = plt.figure(figsize=layout.figure_size)
+    grid_layout = figure.add_gridspec(
+        len(layout.height_ratios),
         3,
-        3,
-        width_ratios=(1.0, 0.14, 1.0),
-        height_ratios=(1.0, 0.18, 0.06),
-        hspace=0.08,
-        wspace=0.02,
+        width_ratios=layout.width_ratios,
+        height_ratios=layout.height_ratios,
+        hspace=layout.vertical_space,
+        wspace=layout.horizontal_space,
     )
-    native_axis = figure.add_subplot(layout[0, 0])
-    process_axis = figure.add_subplot(layout[0, 1])
-    grid_axis = figure.add_subplot(layout[0, 2])
-    colorbar_layout = layout[2, :].subgridspec(1, 3, width_ratios=(0.2, 0.6, 0.2))
+    colorbar_layout = grid_layout[layout.colorbar_row, :].subgridspec(
+        1,
+        3,
+        width_ratios=layout.colorbar_width_ratios,
+    )
+    native_axis = figure.add_subplot(grid_layout[0, 0])
+    process_axis = figure.add_subplot(grid_layout[0, 1])
+    grid_axis = figure.add_subplot(grid_layout[0, 2])
     colorbar_axis = figure.add_subplot(colorbar_layout[0, 1])
 
     face_colors = np.tile(colors.to_rgba("#D9D9D9"), (len(vertices), 1))
@@ -131,7 +163,7 @@ def main() -> None:
         native_axis.axvline(edge, color="white", linewidth=0.20, alpha=0.42, zorder=3)
         native_axis.axhline(edge, color="white", linewidth=0.20, alpha=0.42, zorder=3)
     native_axis.set_facecolor("#D9D9D9")
-    native_axis.set_title("(a) Native TEMPO Level 2 footprints", pad=5)
+    native_axis.set_title(layout.native_title, pad=layout.title_pad)
     _format_map_axis(native_axis)
 
     half_extent = IMG_RANGE / 2
@@ -144,13 +176,13 @@ def main() -> None:
         interpolation="none",
     )
     grid_axis.set_facecolor("#D9D9D9")
-    grid_axis.set_title("(b) Area-weighted 3 km grid", pad=5)
+    grid_axis.set_title(layout.grid_title, pad=layout.title_pad)
     _format_map_axis(grid_axis)
 
     process_axis.set_axis_off()
     process_axis.text(
         0.50,
-        0.59,
+        layout.process_text_y,
         "area-overlap\nweighted mean",
         ha="center",
         va="center",
@@ -158,27 +190,36 @@ def main() -> None:
     )
     process_axis.annotate(
         "",
-        xy=(0.78, 0.39),
-        xytext=(0.22, 0.39),
+        xy=(layout.arrow_end_x, layout.arrow_y),
+        xytext=(layout.arrow_start_x, layout.arrow_y),
         arrowprops={
             "arrowstyle": "-|>",
             "color": "#303030",
-            "linewidth": 1.15,
-            "mutation_scale": 10,
+            "linewidth": layout.arrow_linewidth,
+            "mutation_scale": layout.arrow_mutation_scale,
         },
     )
 
     colorbar = figure.colorbar(image, cax=colorbar_axis, orientation="horizontal")
-    colorbar.set_label(r"NO$_2$ column ($10^{15}$ molecules cm$^{-2}$)", fontsize=7)
-    colorbar.ax.tick_params(labelsize=6.5, length=2.5)
+    colorbar.set_label(
+        r"NO$_2$ column ($10^{15}$ molecules cm$^{-2}$)",
+        fontsize=layout.colorbar_font_size,
+        labelpad=layout.colorbar_label_pad,
+    )
+    colorbar.ax.tick_params(
+        labelsize=layout.colorbar_tick_font_size,
+        length=layout.colorbar_tick_length,
+        pad=layout.colorbar_tick_pad,
+    )
     colorbar.outline.set_linewidth(0.5)
 
-    figure.subplots_adjust(left=0.085, right=0.985, top=0.91, bottom=0.15)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    figure.savefig(OUTPUT_STEM.with_suffix(".pdf"), bbox_inches="tight")
-    figure.savefig(OUTPUT_STEM.with_suffix(".png"), dpi=450, bbox_inches="tight")
+    figure.subplots_adjust(
+        left=layout.left,
+        right=layout.right,
+        top=layout.top,
+        bottom=layout.bottom,
+    )
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.015)
+    figure.savefig(output_stem.with_suffix(".png"), dpi=450, bbox_inches="tight", pad_inches=0.015)
     plt.close(figure)
-
-
-if __name__ == "__main__":
-    main()

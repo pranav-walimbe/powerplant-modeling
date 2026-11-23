@@ -1,6 +1,5 @@
-"""Plot eligible change-class counts across emissions change thresholds."""
+"""Shared data preparation and rendering for label-threshold figures."""
 
-import argparse
 import tempfile
 from pathlib import Path
 
@@ -17,25 +16,8 @@ from config import STRATIFICATION_WINDOW_THRESHOLD
 
 plt.switch_backend("Agg")
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_STEM = REPOSITORY_ROOT / "assets" / "paper" / "visuals" / "label-threshold-samples"
-DEFAULT_MAX_THRESHOLD = 1_000.0
-DEFAULT_THRESHOLD_STEP = 10.0
 DECREASE_COLOR = "#0072B2"
 INCREASE_COLOR = "#E69F00"
-
-
-def parse_args() -> argparse.Namespace:
-    """Parse label-threshold plotting options.
-
-    Returns:
-        Parsed command-line arguments.
-    """
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-stem", type=Path, default=DEFAULT_OUTPUT_STEM)
-    parser.add_argument("--max-threshold", type=float, default=DEFAULT_MAX_THRESHOLD)
-    parser.add_argument("--threshold-step", type=float, default=DEFAULT_THRESHOLD_STEP)
-    return parser.parse_args()
 
 
 def _load_eligible_changes() -> np.ndarray:
@@ -67,6 +49,9 @@ def _annotate_selected_threshold(
     selected_threshold: float,
     decrease_count: int,
     increase_count: int,
+    *,
+    threshold_units: str,
+    threshold_decimals: int,
 ) -> None:
     # Mark the configured cutoff and its two eligible class counts
     axis.axvline(
@@ -75,8 +60,9 @@ def _annotate_selected_threshold(
         linestyle="--",
         linewidth=1.0,
     )
+    threshold_label = f"{selected_threshold:.{threshold_decimals}f} {threshold_units}"
     axis.annotate(
-        f"{selected_threshold:g} lb/hr",
+        threshold_label,
         (selected_threshold, 1.0),
         xycoords=("data", "axes fraction"),
         xytext=(4, -4),
@@ -115,8 +101,14 @@ def _plot_counts(
     decrease_counts: np.ndarray,
     increase_counts: np.ndarray,
     output_stem: Path,
+    *,
+    selected_threshold: float,
+    threshold_units: str,
+    threshold_decimals: int,
+    figure_size: tuple[float, float],
+    x_tick_step: float | None,
 ) -> None:
-    # Render the compact paper figure in PDF and PNG formats
+    # Render the paper figure in PDF and PNG formats
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -127,23 +119,27 @@ def _plot_counts(
             "ps.fonttype": 42,
         }
     )
-    figure, axis = plt.subplots(figsize=(3.5, 2.15))
+    figure, axis = plt.subplots(figsize=figure_size)
     axis.plot(thresholds, decrease_counts, color=DECREASE_COLOR, linewidth=1.6, label="Decrease")
     axis.plot(thresholds, increase_counts, color=INCREASE_COLOR, linewidth=1.6, label="Increase")
 
-    selected_index = int(np.flatnonzero(thresholds == STRATIFICATION_WINDOW_THRESHOLD)[0])
+    selected_index = int(np.flatnonzero(np.isclose(thresholds, selected_threshold))[0])
     _annotate_selected_threshold(
         axis,
-        STRATIFICATION_WINDOW_THRESHOLD,
+        selected_threshold,
         int(decrease_counts[selected_index]),
         int(increase_counts[selected_index]),
+        threshold_units=threshold_units,
+        threshold_decimals=threshold_decimals,
     )
     axis.set(
-        xlabel=r"NO$_x$ emissions change threshold (lb/hr)",
+        xlabel=rf"NO$_x$ emissions change threshold ({threshold_units})",
         ylabel="Eligible samples",
         xlim=(float(thresholds[0]), float(thresholds[-1])),
         ylim=(0, None),
     )
+    if x_tick_step is not None:
+        axis.set_xticks(np.arange(0.0, float(thresholds[-1]) + 1.0, x_tick_step))
     axis.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     axis.grid(axis="y", color="#D9D9D9", linewidth=0.6)
     axis.set_axisbelow(True)
@@ -157,26 +153,43 @@ def _plot_counts(
     plt.close(figure)
 
 
-def main() -> None:
-    """Generate the label-threshold sample-count figure."""
-    args = parse_args()
+def generate(
+    output_stem: Path,
+    *,
+    max_threshold: float,
+    threshold_step: float,
+    value_scale: float,
+    threshold_units: str,
+    threshold_decimals: int,
+    figure_size: tuple[float, float],
+    x_tick_step: float | None = None,
+) -> None:
+    """Generate one label-threshold sample-count figure."""
+    selected_threshold = float(STRATIFICATION_WINDOW_THRESHOLD) * value_scale
     thresholds = np.unique(
         np.append(
-            np.arange(0.0, args.max_threshold + args.threshold_step, args.threshold_step),
-            STRATIFICATION_WINDOW_THRESHOLD,
+            np.arange(0.0, max_threshold + threshold_step, threshold_step),
+            selected_threshold,
         )
     )
-    changes = _load_eligible_changes()
+    changes = _load_eligible_changes() * value_scale
     decrease_counts, increase_counts = _threshold_counts(changes, thresholds)
-    _plot_counts(thresholds, decrease_counts, increase_counts, args.output_stem)
+    _plot_counts(
+        thresholds,
+        decrease_counts,
+        increase_counts,
+        output_stem,
+        selected_threshold=selected_threshold,
+        threshold_units=threshold_units,
+        threshold_decimals=threshold_decimals,
+        figure_size=figure_size,
+        x_tick_step=x_tick_step,
+    )
 
-    selected_index = int(np.flatnonzero(thresholds == STRATIFICATION_WINDOW_THRESHOLD)[0])
+    selected_index = int(np.flatnonzero(np.isclose(thresholds, selected_threshold))[0])
+    selected_label = f"{selected_threshold:.{threshold_decimals}f} {threshold_units}"
     print(
-        f"Eligible records: {len(changes):,}; at {STRATIFICATION_WINDOW_THRESHOLD:g} lb/hr: "
+        f"Eligible records: {len(changes):,}; at {selected_label}: "
         f"decrease={decrease_counts[selected_index]:,}, increase={increase_counts[selected_index]:,}"
     )
-    print(f"Wrote {args.output_stem.with_suffix('.pdf')} and {args.output_stem.with_suffix('.png')}")
-
-
-if __name__ == "__main__":
-    main()
+    print(f"Wrote {output_stem.with_suffix('.pdf')} and {output_stem.with_suffix('.png')}")
