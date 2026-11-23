@@ -1,4 +1,4 @@
-"""Compare clear and unclear visual agreement in two increase samples."""
+"""Shared data preparation and rendering for NO2 class-agreement figures."""
 
 import json
 from dataclasses import dataclass
@@ -14,9 +14,7 @@ from config import MODEL_IMAGE_KEYS, RUNS_DIR
 
 plt.switch_backend("Agg")
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = REPOSITORY_ROOT / "assets" / "paper" / "visuals"
-OUTPUT_STEM = OUTPUT_DIR / "no2-class-agreement-examples"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 RUN_DIR = Path(RUNS_DIR) / "classification_only_zscore_20261007_202105"
 NO2_DISPLAY_SCALE = 1.0e15
 
@@ -81,21 +79,41 @@ def _plot_example(
     sequence: np.ndarray,
     nox_delta: float,
     normalization: colors.Normalize,
+    *,
+    nox_delta_scale: float,
+    nox_delta_units: str,
+    nox_delta_decimals: int,
+    colorbar_gap_ratio: float,
 ) -> None:
     # Plot one labeled five-timestep NO2 sequence
-    layout = slot.subgridspec(
-        4,
-        5,
-        height_ratios=(0.23, 0.14, 1.0, 0.055),
-        hspace=0.04,
-        wspace=0.06,
-    )
+    if colorbar_gap_ratio > 0.0:
+        layout = slot.subgridspec(
+            5,
+            5,
+            height_ratios=(0.23, 0.14, 1.0, colorbar_gap_ratio, 0.055),
+            hspace=0.04,
+            wspace=0.06,
+        )
+        colorbar_row = 4
+    else:
+        layout = slot.subgridspec(
+            4,
+            5,
+            height_ratios=(0.23, 0.14, 1.0, 0.055),
+            hspace=0.04,
+            wspace=0.06,
+        )
+        colorbar_row = 3
     header_axis = figure.add_subplot(layout[0, :])
     header_axis.set_axis_off()
     header_axis.text(
         0.0,
         0.5,
-        f"({panel_label}) {example.agreement} ($\\Delta$NO$_x$: {nox_delta:+.1f} lb/hr)",
+        (
+            f"({panel_label}) {example.agreement} "
+            f"($\\Delta$NO$_x$: "
+            f"{nox_delta * nox_delta_scale:+.{nox_delta_decimals}f} {nox_delta_units})"
+        ),
         ha="left",
         va="center",
         fontsize=7.2,
@@ -117,14 +135,26 @@ def _plot_example(
         )
         _format_raster_axis(raster_axis)
 
-    colorbar = figure.colorbar(image, cax=figure.add_subplot(layout[3, 1:4]), orientation="horizontal")
+    colorbar = figure.colorbar(
+        image,
+        cax=figure.add_subplot(layout[colorbar_row, 1:4]),
+        orientation="horizontal",
+    )
     colorbar.set_label(r"NO$_2$ column ($10^{15}$ molecules cm$^{-2}$)", fontsize=5.5, labelpad=0.4)
     colorbar.ax.tick_params(labelsize=5.0, length=1.6, pad=1)
     colorbar.outline.set_linewidth(0.35)
 
 
-def main() -> None:
-    """Generate the two-example NO2 sequence comparison."""
+def generate(
+    output_stem: Path,
+    *,
+    figure_size: tuple[float, float],
+    nox_delta_scale: float,
+    nox_delta_units: str,
+    nox_delta_decimals: int,
+    colorbar_gap_ratio: float,
+) -> None:
+    """Generate the comparison with a supplied paper layout and unit scale."""
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -136,7 +166,7 @@ def main() -> None:
     )
     sequences, nox_deltas = _load_examples()
     normalization = _normalization(sequences)
-    figure = plt.figure(figsize=(3.5, 2.85))
+    figure = plt.figure(figsize=figure_size)
     layout = figure.add_gridspec(
         2,
         1,
@@ -162,13 +192,14 @@ def main() -> None:
             sequence,
             nox_delta,
             normalization,
+            nox_delta_scale=nox_delta_scale,
+            nox_delta_units=nox_delta_units,
+            nox_delta_decimals=nox_delta_decimals,
+            colorbar_gap_ratio=colorbar_gap_ratio,
         )
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    figure.savefig(OUTPUT_STEM.with_suffix(".pdf"), bbox_inches="tight")
-    figure.savefig(OUTPUT_STEM.with_suffix(".png"), dpi=450, bbox_inches="tight")
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    figure.savefig(output_stem.with_suffix(".png"), dpi=450, bbox_inches="tight")
     plt.close(figure)
 
-
-if __name__ == "__main__":
-    main()
